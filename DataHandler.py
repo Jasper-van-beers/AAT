@@ -14,6 +14,9 @@ from tqdm import tqdm
 
 class DataHandler:
 
+    # Function to initialize the DataHandler class
+    # Stores the constants used by other scripts (e.g. Dataframe column names and file paths to data)
+    # Any global functions will be done here
     def __init__(self, condition_folder_path, data_folder_path, printINFO = True):
         self.INFO = printINFO
         self.cond_path = condition_folder_path
@@ -509,6 +512,7 @@ class DataHandler:
 
         return np.reshape(R*a_vec, (3,))
 
+
     
     def ResampleData(self, DataFrame):
         DF = DataFrame.copy(deep = True)
@@ -591,6 +595,7 @@ class DataHandler:
         return time_array
 
     
+
     def ImportData(self):
         self._Data = []
         if self.INFO:
