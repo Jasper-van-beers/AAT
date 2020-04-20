@@ -127,6 +127,7 @@ class DataHandler:
         # Add something to rename acceleration column to acceleration_z
         pass
 
+
     # Obtaining distance is not so trivial -> Due to double integration, noise and bias cause large errors in estimates
     # Issue with double integrations is that we integrate sensor noise and it explodes the distance estimates
     # -> Try to mitigate this by not taking straight integrals but instead using Physical principles
@@ -200,6 +201,7 @@ class DataHandler:
         DF = DF.reset_index(drop = True)
 
         return DF
+
 
     # Compute RT can be done before orientation corrections and acceleration calibration
     # because we are looking for a reaction - which will be a change in acceleration. This
@@ -423,59 +425,134 @@ class DataHandler:
         return DF, Removed_Data
 
 
-    def GetQuat(self, time, gx, gy, gz, theta_ic):
+    # Integrate gyroscopic data (angular rates) to get angles
+    # Ideally, we would use some from of state estimation (e.g. Kalman filter) to
+    # obtain a better representation of the true angular rates (since integrating
+    # gyroscopic data incurs significant errors, if drift and biases are not
+    # accounted for). However, there is insufficient information to adequately do
+    # this at this point. The time scales we are looking at are small 
+    # (~ 2 seconds), so errors will not have propagated so much. That said, 
+    # depending on the sensor, errors can be in the order of centimeters after even
+    # just a second. 
+    def IntegrateGyro(self, time, g_vec, theta_ic, scale = 1000):
 
-        pass
+        th_vec = np.zeros((3, len(time))) + theta_ic
 
+        for t in range(len(time) - 1):
+            dt = (time[t + 1] - time[t])/scale
+
+            # Forward Euler Integration
+            for i in range(len(th_vec)):
+                th_vec[i, t + 1] = th_vec[i, t] + g_vec[i, t] * dt
+        
+        return th_vec
+
+
+    # Get quaternion representation of the angle vector
+    def GetQuat(self, theta_vec):
+        quat_vec = np.zeros((4, len(theta_vec[0])))
+
+        for t in range(len(theta_vec[0])):
+            mag = np.sqrt( (theta_vec[0, t]**2 + theta_vec[1, t]**2 + theta_vec[2, t]**2) )
+
+            # Normalized angle vector
+            Nth_vec = theta_vec[:, t]/mag
+
+            thetaOver2 = mag/2
+            sinTO2 = np.sin(thetaOver2)
+            cosTO2 = np.cos(thetaOver2)
+
+            quat_vec[0][t] = cosTO2
+            quat_vec[1][t] = sinTO2 * Nth_vec[0]
+            quat_vec[2][t] = sinTO2 * Nth_vec[1]
+            quat_vec[3][t] = sinTO2 * Nth_vec[2]
+
+        return quat_vec
+
+
+
+    def Correction4Rotations(self, a_vec, th_vec, AngleThreshold = 1*np.pi/180):
+        # As order of rotations is important, infer the order of rotations
+        # based on which axes first exceed the 'AngleThreshold' 
+        # The default angle threshold is set to 1 degree, as below this the small
+        # angle approximation typically holds (i.e. rotations are negligible)
+        IndexExceedingThres =  [(np.where(abs(th_vec[0]) > AngleThreshold)[0][0]),
+                                (np.where(abs(th_vec[1]) > AngleThreshold)[0][0]),
+                                (np.where(abs(th_vec[2]) > AngleThreshold)[0][0])]
+        # We reverse the order of the argsort since argsort will give the highest
+        # value first, whereas we want the lowest values (i.e. first instance)
+        RotOrder = np.argsort(IndexExceedingThres)[::-1]
+
+        quat_vec_original = self.GetQuat(th_vec)
+        # We need to re-arrange the quaternion vector to correspond to the rotation
+        # vector
+        quat_vec = np.copy(quat_vec_original)
+        for i in range(len(RotOrder)):
+            quat_vec[i + 1] = quat_vec_original[RotOrder[i] + 1]
+        
+        # Since we are going from the body, to the inertial frame, we need to take the inverse of the
+        # quaternion, q (which is equivalent to its conjugate). We are going from the body frame to the
+        # interial frame since we the accelerations are measured w.r.t to the device (i.e. body frame)
+        # hence, to account for any rotations (w.r.t the initial position, which we interpret as the 
+        # inertial frame) we need to project our accelerations from the body frame to the inertial frame.
+        q0 = quat_vec[0]
+        q1 = quat_vec[1]
+        q2 = quat_vec[2]
+        q3 = quat_vec[3]
+
+        # Rotation Matrix
+        R_1 = [(q0*q0 + q1*q1 - q2*q2 -q3*q3), (2*(q1*q2 - q0*q3)), (2*(q0*q2 + q1*q3))]
+        R_2 = [(2*(q1*q2 + q0*q3)), (q0*q0 - q1*q1 + q2*q2 - q3*q3), (2*(q2*q3 - q0*q1))]
+        R_3 = [(2*(q1*q3 - q0*q2)), (2*(q0*q1 + q2*q3)), (q0*q0 - q1*q1 - q2*q2 + q3*q3)]
+
+        R = np.mat(np.vstack((R_1, R_2, R_3)))
+
+        return np.reshape(R*a_vec, (3,))
 
     
-    def RunPreProcessing(self, DataFrame, Resample = True, Correct_for_orientation = True):
+    def ResampleData(self, DataFrame):
         DF = DataFrame.copy(deep = True)
+        ResampledList = []
         if self.INFO:
-            print("[INFO] Running Preprocessing...")
+            print("[INFO] Running Resampling...")
             iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
             iterrows = DF.iterrows()
         for i, row in iterrows:
-            # Order is Resample, Filter, then Correct_for_orientation since Resample will make filtering easier,
-            # while filtering will reduce the scope of the data to process
-            if Resample:
-                self._ResampledData, self._ResampledCols, self._ResampledTime = self.ResampleData(row)
-                DF.at[i, self._ResampledCols] = self._ResampledData
-                DF.at[i, self.constants['TIME_COLUMN']] = self._ResampledTime
-                DF.at[i, self.constants['GYRO_TIME_COLUMN']] = self._ResampledTime
-            if Correct_for_orientation:
-                pass
-            pass
+            _ResampledRow = self.ResampleRow(row)
+            ResampledList.append(_ResampledRow)
 
-        return DF
+        ResampledDF = pd.concat(ResampledList, axis = 1).transpose()
+        return ResampledDF
 
 
 
-    def ResampleData(self, data_row):
+    def ResampleRow(self, data_row):
         self.Data2Resample = {'acceleration_z':'ACCELERATION_COLUMN',
                               'acceleration_x':'ACCELERATION_X_COLUMN',
                               'acceleration_y':'ACCELERATION_Y_COLUMN',
                               'gyro_x':'GYRO_X_COLUMN',
                               'gyro_y':'GYRO_Y_COLUMN',
                               'gyro_z':'GYRO_Z_COLUMN'}
-        ResampledCols = [self.constants[v] for k, v in self.Data2Resample.items()]
-        ResampleDF = data_row[ResampledCols].copy(deep = True)
+        ResampledRow = data_row.copy(deep = True)
         ResampledTime = self.AlignTimeArrays(data_row[self.constants['TIME_COLUMN']], data_row[self.constants['GYRO_TIME_COLUMN']], dt = 1)
+        ResampledRow[self.constants['TIME_COLUMN']] = ResampledTime
         for key, value in self.Data2Resample.items():
             if key.startswith('acceleration'):
                 try:
-                    ResampleDF[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['TIME_COLUMN']], ResampledTime)
+                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['TIME_COLUMN']], ResampledTime)
                 except TypeError:
                     pass
             elif key.startswith('gyro'):
                 try:
-                    ResampleDF[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['GYRO_TIME_COLUMN']], ResampledTime)
+                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['GYRO_TIME_COLUMN']], ResampledTime)
                 except TypeError:
                     pass
             else:
                 pass
-        return ResampleDF, ResampledCols, ResampledTime
+        #Remove Gyro time column as it is now redundant 
+        ResampledRow.drop(self.constants['GYRO_TIME_COLUMN'])
+        return ResampledRow
     
 
 
