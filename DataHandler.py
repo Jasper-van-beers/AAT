@@ -16,7 +16,7 @@ class DataHandler:
 
     # Function to initialize the DataHandler class
     # Stores the constants used by other scripts (e.g. Dataframe column names and file paths to data)
-    # Any global functions will be done here
+    # Any global variables will be defined here
     def __init__(self, condition_folder_path, data_folder_path, printINFO = True):
         self.INFO = printINFO
         self.cond_path = condition_folder_path
@@ -59,7 +59,10 @@ class DataHandler:
                         'V_FINAL_COLUMN' : 'v_final',
                         'V_MAX_COLUMN' : 'v_max',
                         'ACCELEROMETER_NOISE' : 'accelerometer_noise',
-                        'GYRO_NOISE' : 'gyro_noise'}
+                        'GYRO_NOISE' : 'gyro_noise',
+                        'ANGLE_X_COLUMN' : 'angle_x',
+                        'ANGLE_Y_COLUMN' : 'angle_y',
+                        'ANGLE_Z_COLUMN' : 'angle_z'}
         standard_cols = ['PARTICIPANT_COLUMN', 'DEVICE_COLUMN', 
                         'EXPERIMENT_COLUMN', 'CONDITION_COLUMN', 
                         'SIGNED_UP_COLUMN', 'SESSION_COLUMN']
@@ -101,7 +104,8 @@ class DataHandler:
                                'TIME_COLUMN']
 
 
-
+    # Basic utility function to check if specified files are found in the specified directory
+    # Returns a True/False Boolean
     def CheckFiles(self, files, path):
         os.chdir(path)
         output = all(os.path.isfile(os.path.join(path, file)) for file in files)
@@ -109,28 +113,40 @@ class DataHandler:
         return output
 
     
-    
+    # Utility function to save dataframes for future use
     def SaveDF(self, filename, dataframe, path):
         os.chdir(path)
         dataframe.to_pickle('./{}'.format(filename))
         os.chdir(self.cwd)
 
 
-
+    # Utility function to load saved dataframes
     def LoadDF(self, filename, path):
         os.chdir(path)
         df = pd.read_pickle(os.path.join(path, filename))
-        self.Data = df
         os.chdir(self.cwd)
         return df
 
 
-
+    # TODO: Utility function to rename columns of the columns of the dataframe and modify
+    # the appropriate global class constants
     def RenameDFCols(self):
         # Add something to rename acceleration column to acceleration_z
         pass
 
 
+    # Utility function to check if all the expected information is found in a dictionary
+    def CheckInfo(self, ExpectedInfoList, GivenInfoDict):
+        if all(info in GivenInfoDict for info in ExpectedInfoList):
+            output = True
+        else:
+            output = False
+
+        return output
+
+    
+    # TODO: Function to compute distances. Note: With current information, reliable estimates of distance 
+    #   cannot be obtained. See explanations below. 
     # Obtaining distance is not so trivial -> Due to double integration, noise and bias cause large errors in estimates
     # Issue with double integrations is that we integrate sensor noise and it explodes the distance estimates
     # -> Try to mitigate this by not taking straight integrals but instead using Physical principles
@@ -144,19 +160,256 @@ class DataHandler:
     def ComputeDistanceVelocity(self):
 
         pass
+    
+    
+    def Correct4Rotations(self, DataFrame, StoreTheta = True):
+        DF = DataFrame.copy(deep = True)
 
-
-
-    def CheckInfo(self, ExpectedInfoList, GivenInfoDict):
-        if all(info in GivenInfoDict for info in ExpectedInfoList):
-            output = True
+        if self.INFO:
+            print("[INFO] Correction for rotations...")
+            iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
-            output = False
+            iterrows = DF.iterrows()
+        
+        CorrectedDataList = []
 
-        return output
+        InitialTheta = np.zeros((3, 1))
+        AngleThreshold = 1*np.pi/180.
+
+        for idx, row in iterrows:
+            if len(row[self.constants['GYRO_X_COLUMN']]):
+                _gyro_vec = np.vstack((row[self.constants['GYRO_X_COLUMN']],
+                                    row[self.constants['GYRO_Y_COLUMN']],
+                                    row[self.constants['GYRO_Z_COLUMN']]))
+                _acc_vec = np.vstack((row[self.constants['ACCELERATION_X_COLUMN']],
+                                    row[self.constants['ACCELERATION_Y_COLUMN']],
+                                    row[self.constants['ACCELERATION_COLUMN']]))
+                _th_vec = self.IntegrateGyro(row[self.constants['TIME_COLUMN']], _gyro_vec, InitialTheta, scale = 1000)
+                _CAcc_vec = self.ApplyRotationCorrection(_acc_vec, _th_vec, AngleThreshold=AngleThreshold)
+                DataRow = row.copy(deep = True)
+
+                DataRow[self.constants['ACCELERATION_X_COLUMN']] = _CAcc_vec[0, :]
+                DataRow[self.constants['ACCELERATION_Y_COLUMN']] = _CAcc_vec[1, :]
+                DataRow[self.constants['ACCELERATION_COLUMN']] = _CAcc_vec[2, :]
+
+                if StoreTheta:
+                    DataRow[self.constants['ANGLE_X_COLUMN']] = _th_vec[0, :]
+                    DataRow[self.constants['ANGLE_Y_COLUMN']] = _th_vec[1, :]
+                    DataRow[self.constants['ANGLE_Z_COLUMN']] = _th_vec[2, :]
+                
+            else:
+                if StoreTheta:
+                    DataRow[self.constants['ANGLE_X_COLUMN']] = 0
+                    DataRow[self.constants['ANGLE_Y_COLUMN']] = 0
+                    DataRow[self.constants['ANGLE_Z_COLUMN']] = 0
+                DataRow = row.copy(deep = True)
+
+            CorrectedDataList.append(DataRow)
+
+        CorrectedData = pd.concat(CorrectedDataList, axis = 1).transpose()
+        
+        return CorrectedData
 
 
-    # Only accept array like or list objects
+    # Integrate gyroscopic data (angular rates) to get angles    
+    # Function to correct the accelerations for rotations during the response of a single 
+    # participant, basedon information from the gyroscopic data.
+    def ApplyRotationCorrection(self, a_vec, th_vec, AngleThreshold = 1*np.pi/180):
+        # As order of rotations is important, infer the order of rotations
+        # based on which axes first exceed the 'AngleThreshold' 
+        # The default angle threshold is set to 1 degree, as below this the small
+        # angle approximation typically holds (i.e. rotations are negligible)
+        # If angle changes are not significant, then assume an order of x->y->z
+        try:
+            IndexExceedingThres =  [(np.where(abs(th_vec[0]) > AngleThreshold)[0][0]),
+                                    (np.where(abs(th_vec[1]) > AngleThreshold)[0][0]),
+                                    (np.where(abs(th_vec[2]) > AngleThreshold)[0][0])]
+            # We reverse the order of the argsort since argsort will give the highest
+            # value first, whereas we want the lowest values (i.e. first instance)
+            RotOrder = np.argsort(IndexExceedingThres)[::-1]
+        except IndexError:
+            RotOrder = np.array([2, 1, 0])
+
+        quat_vec_original = self.GetQuat(th_vec)
+        # We need to re-arrange the quaternion vector to correspond to the rotation
+        # vector
+        quat_vec = np.copy(quat_vec_original)
+        for i in range(len(RotOrder)):
+            quat_vec[i + 1] = quat_vec_original[RotOrder[i] + 1]
+        
+        # Since we are going from the body, to the inertial frame, we need to take the inverse of the
+        # quaternion, q (which is equivalent to its conjugate). We are going from the body frame to the
+        # interial frame since we the accelerations are measured w.r.t to the device (i.e. body frame)
+        # hence, to account for any rotations (w.r.t the initial position, which we interpret as the 
+        # inertial frame) we need to project our accelerations from the body frame to the inertial frame.
+        q0 = quat_vec[0]
+        q1 = quat_vec[1]
+        q2 = quat_vec[2]
+        q3 = quat_vec[3]
+
+        a_corrected = np.copy(a_vec) * 0
+
+        for i in range(len(a_vec[0])):
+            # Rotation Matrix
+            R_1 = [(q0[i]*q0[i] + q1[i]*q1[i] - q2[i]*q2[i] -q3[i]*q3[i]), (2*(q1[i]*q2[i] - q0[i]*q3[i])), (2*(q0[i]*q2[i] + q1[i]*q3[i]))]
+            R_2 = [(2*(q1[i]*q2[i] + q0[i]*q3[i])), (q0[i]*q0[i] - q1[i]*q1[i] + q2[i]*q2[i] - q3[i]*q3[i]), (2*(q2[i]*q3[i] - q0[i]*q1[i]))]
+            R_3 = [(2*(q1[i]*q3[i] - q0[i]*q2[i])), (2*(q0[i]*q1[i] + q2[i]*q3[i])), (q0[i]*q0[i] - q1[i]*q1[i] - q2[i]*q2[i] + q3[i]*q3[i])]
+
+            R = np.mat(np.vstack((R_1, R_2, R_3)))
+
+            a_corrected[:, i] = np.reshape(R*np.reshape(a_vec[:, i], (3, 1)), (3,))
+
+        # R_1 = [(q0*q0 + q1*q1 - q2*q2 -q3*q3), (2*(q1*q2 - q0*q3)), (2*(q0*q2 + q1*q3))]
+        # R_2 = [(2*(q1*q2 + q0*q3)), (q0*q0 - q1*q1 + q2*q2 - q3*q3), (2*(q2*q3 - q0*q1))]
+        # R_3 = [(2*(q1*q3 - q0*q2)), (2*(q0*q1 + q2*q3)), (q0*q0 - q1*q1 - q2*q2 + q3*q3)]
+
+        # R_1 = np.array(R_1).reshape((len(a_vec[0]), 3))
+        # R_2 = np.array(R_2).reshape((len(a_vec[0]), 3))
+        # R_3 = np.array(R_2).reshape((len(a_vec[0]), 3))
+
+        # R = np.mat(np.vstack((R_1, R_2, R_3))).reshape((3, 3, len(a_vec[0])))
+        # a_corrected = np.reshape(R*np.reshape(a_vec, (3, len(a_vec[0]))), (3,))
+
+        return a_corrected
+
+    
+    # Get quaternion representation of the angle vector
+    def GetQuat(self, theta_vec):
+        quat_vec = np.zeros((4, len(theta_vec[0])))
+
+        for t in range(len(theta_vec[0])):
+            mag = np.sqrt( (theta_vec[0, t]**2 + theta_vec[1, t]**2 + theta_vec[2, t]**2) )
+
+            # Avoid division by 0 for 0 magnitude, which would occur if all angles are 0. 
+            if theta_vec[:, t].all() == 0 and mag == 0:
+                mag = 1
+
+            # Normalized angle vector
+            Nth_vec = theta_vec[:, t]/mag
+
+            thetaOver2 = mag/2
+            sinTO2 = np.sin(thetaOver2)
+            cosTO2 = np.cos(thetaOver2)
+
+            quat_vec[0][t] = cosTO2
+            quat_vec[1][t] = sinTO2 * Nth_vec[0]
+            quat_vec[2][t] = sinTO2 * Nth_vec[1]
+            quat_vec[3][t] = sinTO2 * Nth_vec[2]
+
+        return quat_vec
+
+
+    # Ideally, we would use some from of state estimation (e.g. Kalman filter) to
+    # obtain a better representation of the true angular rates (since integrating
+    # gyroscopic data incurs significant errors, if drift and biases are not
+    # accounted for). However, there is insufficient information to adequately do
+    # this at this point. The time scales we are looking at are small 
+    # (~ 2 seconds), so errors will not have propagated so much. That said, 
+    # depending on the sensor, errors can be in the order of centimeters after even
+    # just a second. 
+    def IntegrateGyro(self, time, g_vec, theta_ic, scale = 1000):
+
+        th_vec = np.zeros((3, len(time))) + theta_ic
+
+        for t in range(len(time) - 1):
+            dt = (time[t + 1] - time[t])/scale
+
+            # Forward Euler Integration
+            for i in range(len(th_vec)):
+                th_vec[i, t + 1] = th_vec[i, t] + g_vec[i, t] * dt
+        
+        return th_vec
+
+
+    # Function to resample acceleration and gyroscopic data from an inconsistent 4-5 ms
+    # to 1 ms. Moreover, this function also resamples and unifies the time arrays between
+    # the gyroscope and accelerometer
+    def ResampleData(self, DataFrame):
+        DF = DataFrame.copy(deep = True)
+        ResampledList = []
+        if self.INFO:
+            print("[INFO] Running Resampling...")
+            iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
+        else:
+            iterrows = DF.iterrows()
+        for i, row in iterrows:
+            _ResampledRow = self.ResampleRow(row)
+            ResampledList.append(_ResampledRow)
+
+        ResampledDF = pd.concat(ResampledList, axis = 1).transpose()
+        return ResampledDF
+
+
+    # Function which is used by ResampleData. This function actually handles the 
+    # computations for the resampling, while ResampleData applies this to the entire
+    # data frame
+    def ResampleRow(self, data_row):
+        self.Data2Resample = {'acceleration_z':'ACCELERATION_COLUMN',
+                              'acceleration_x':'ACCELERATION_X_COLUMN',
+                              'acceleration_y':'ACCELERATION_Y_COLUMN',
+                              'gyro_x':'GYRO_X_COLUMN',
+                              'gyro_y':'GYRO_Y_COLUMN',
+                              'gyro_z':'GYRO_Z_COLUMN'}
+        ResampledRow = data_row.copy(deep = True)
+        ResampledTime = self.AlignTimeArrays(data_row[self.constants['TIME_COLUMN']], data_row[self.constants['GYRO_TIME_COLUMN']], dt = 1)
+        ResampledRow[self.constants['TIME_COLUMN']] = ResampledTime
+        for key, value in self.Data2Resample.items():
+            if key.startswith('acceleration'):
+                try:
+                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['TIME_COLUMN']], ResampledTime)
+                except TypeError:
+                    pass
+            elif key.startswith('gyro'):
+                try:
+                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['GYRO_TIME_COLUMN']], ResampledTime)
+                except TypeError:
+                    pass
+            else:
+                pass
+        #Remove Gyro time column as it is now redundant 
+        ResampledRow.drop(self.constants['GYRO_TIME_COLUMN'])
+        return ResampledRow
+    
+
+    # Function to interpolate a data array using B-Spline interpolation. 
+    def Interpolate(self, y, x1, x2):
+        # Scan input data for nans, remove them from the array. The best we can do is interpolate these points with neighbors
+        y_nonan = y[np.invert(np.isnan(y))]
+        x1 = x1[np.invert(np.isnan(y))]
+        x1_nonan = x1[np.invert(np.isnan(x1))]
+        y_nonan = y_nonan[np.invert(np.isnan(x1))]
+
+        Bspline = spinter.splrep(x1_nonan, y_nonan)
+        y2 = spinter.splev(x2, Bspline)
+
+        return y2
+
+
+    # Function to align the time arrays of the gyroscopic and accelerometer 
+    # sensors. dt is in milliseconds 
+    def AlignTimeArrays(self, acc_time, gyro_time, dt = 1):
+        # All experiments should have accelerometer data, but in case they do not
+        # TODO: Add tags for participants with missing data, can be filtered out
+        try:
+            if len(acc_time) & len(gyro_time):
+                # Some devices (using Simple Accelerometer) do not have gyroscopic data
+                t_start = np.nanmax((acc_time[0], gyro_time[0]))
+                t_end = np.nanmin((acc_time[-1], gyro_time[-1]))
+                time_array = np.arange(t_start, t_end, dt)
+            elif len(acc_time):
+                t_start = acc_time[0]
+                t_end = acc_time[-1]
+                time_array = np.arange(t_start, t_end, dt)
+            else:
+                time_array = np.nan
+        except TypeError:
+            time_array = np.nan
+
+        return time_array
+
+
+    # Function to check data type, only accept array like or list objects. Exact type is not checked, only
+    # the desired properties
     def HasArrayData(self, DataRow, Column):
         try:
             # If we can obtain a shape from the data an array-like type
@@ -178,7 +431,7 @@ class DataHandler:
         return HasData
 
 
-
+    # Function to filter missing data. 
     def FilterNaNs(self, DataFrame):
         DF = DataFrame.copy(deep = True)
         if self.INFO:
@@ -205,7 +458,8 @@ class DataHandler:
 
         return DF
 
-
+    # Function to compute the reaction times of the participants, based on the acceleration signals 
+    # exceeding some defined threshold. 
     # Compute RT can be done before orientation corrections and acceleration calibration
     # because we are looking for a reaction - which will be a change in acceleration. This
     # is therefore independent of the absolute of acceleration (only relative values are 
@@ -254,7 +508,8 @@ class DataHandler:
         return DF
 
 
-
+    # Function to check if the reaction time is realistic (default: RT is realistic if RT > 200 ms)
+    # Returns True/False 
     def HasRealisticRT(self, DataRow, RTThreshold):
         NoReactionflag = 0
         try:
@@ -326,7 +581,18 @@ class DataHandler:
         return DataRow, stds
 
 
-
+    # Function to determine if the acceleration data is realistic. Here, an approximation is made on the 
+    # average acceleration needed to fully extend a human arm in the timeframe (~2 seconds). This is itself 
+    # an (exaggerated) approximation of the motion of the experiment. For starters, this average acceleration
+    # relies on the exact length of one's arm. Moreover, it takes the full arm distance when it is likely that
+    # the true distance is less than this. However, the largest distance was taken to allow for more flexibility
+    # in the conditions. In essense, this function compares the average measured accelerations, to the expected
+    # average. Should the measured accelerations exceed this expected average, then the accelerations are deemed
+    # unrealistic. The initial goal of this function was to remove participants who had sustained accelerations 
+    # between 1-10 m/s^2 for the entire 2 seconds, which is unrealistic. 
+    # NOTE: This function is not really recommended since it removes a lot of the data. This is not due
+    # to particularily stringent conditions, but rather due to the inherent unreliability of the mobile 
+    # sensors themselves. 
     def HasRealisticAccelerations(self, DataRow, MaxArmDist, TimeScale = 1000, Tolerance = 0.10):
         MaxDist = MaxArmDist[DataRow['gender']]
         # Add catch for any missing data (i.e. np.nans)
@@ -351,6 +617,20 @@ class DataHandler:
         return AccIsRealistic
 
 
+    # A general function which aggregates some of the filtering functions into one function.
+    # This function allows for the filtering of:
+    #   - Unrealistic Reaction times (RT)
+    #   - Unrealistic Accelerations
+    # Moreover, this function allows for the "calibration" of the acceleration; this involves 
+    # making an estimate of the offsets in the acceleration. It is assumed that the participants
+    # are holding their phone still before a reacting. Due to this, the accelerations should be 
+    # near zero. Hence, any accelerations measured here are expected to be due to the offsets of 
+    # the accelerometers (magnitudes are the of the expected level ~0.3 m/s^2). Hence, 'calibration'
+    # involves removing these offsets from the measured data. 
+    # This functions allows for the toggling of the different filtering functions.
+    # Moreover, the reaction time threshold can also be set (in milliseconds) and the arm lengths (MaxArmDist)
+    # can also be defined; split between female and male participants (since the paper below has suggested
+    # that there is a significant difference between the genders)
     # Average human reaction time to visual stimulus is 0.25 seconds -> set default threshold to 200
     # Human arm lengths https://www.researchgate.net/figure/ARM-LENGTH-IN-MM-BY-SEX-AND-AGE_tbl3_10567860
     def FilterData(self, Data, RemoveRT = True, KeepNoRT = False, RTThreshold = 200, CalibrateAcc = True, RemoveAcc = True, MaxArmDist = {'female':0.735, 'male':0.810}):
@@ -427,175 +707,8 @@ class DataHandler:
 
         return DF, Removed_Data
 
-
-    # Integrate gyroscopic data (angular rates) to get angles
-    # Ideally, we would use some from of state estimation (e.g. Kalman filter) to
-    # obtain a better representation of the true angular rates (since integrating
-    # gyroscopic data incurs significant errors, if drift and biases are not
-    # accounted for). However, there is insufficient information to adequately do
-    # this at this point. The time scales we are looking at are small 
-    # (~ 2 seconds), so errors will not have propagated so much. That said, 
-    # depending on the sensor, errors can be in the order of centimeters after even
-    # just a second. 
-    def IntegrateGyro(self, time, g_vec, theta_ic, scale = 1000):
-
-        th_vec = np.zeros((3, len(time))) + theta_ic
-
-        for t in range(len(time) - 1):
-            dt = (time[t + 1] - time[t])/scale
-
-            # Forward Euler Integration
-            for i in range(len(th_vec)):
-                th_vec[i, t + 1] = th_vec[i, t] + g_vec[i, t] * dt
-        
-        return th_vec
-
-
-    # Get quaternion representation of the angle vector
-    def GetQuat(self, theta_vec):
-        quat_vec = np.zeros((4, len(theta_vec[0])))
-
-        for t in range(len(theta_vec[0])):
-            mag = np.sqrt( (theta_vec[0, t]**2 + theta_vec[1, t]**2 + theta_vec[2, t]**2) )
-
-            # Normalized angle vector
-            Nth_vec = theta_vec[:, t]/mag
-
-            thetaOver2 = mag/2
-            sinTO2 = np.sin(thetaOver2)
-            cosTO2 = np.cos(thetaOver2)
-
-            quat_vec[0][t] = cosTO2
-            quat_vec[1][t] = sinTO2 * Nth_vec[0]
-            quat_vec[2][t] = sinTO2 * Nth_vec[1]
-            quat_vec[3][t] = sinTO2 * Nth_vec[2]
-
-        return quat_vec
-
-
-
-    def Correction4Rotations(self, a_vec, th_vec, AngleThreshold = 1*np.pi/180):
-        # As order of rotations is important, infer the order of rotations
-        # based on which axes first exceed the 'AngleThreshold' 
-        # The default angle threshold is set to 1 degree, as below this the small
-        # angle approximation typically holds (i.e. rotations are negligible)
-        IndexExceedingThres =  [(np.where(abs(th_vec[0]) > AngleThreshold)[0][0]),
-                                (np.where(abs(th_vec[1]) > AngleThreshold)[0][0]),
-                                (np.where(abs(th_vec[2]) > AngleThreshold)[0][0])]
-        # We reverse the order of the argsort since argsort will give the highest
-        # value first, whereas we want the lowest values (i.e. first instance)
-        RotOrder = np.argsort(IndexExceedingThres)[::-1]
-
-        quat_vec_original = self.GetQuat(th_vec)
-        # We need to re-arrange the quaternion vector to correspond to the rotation
-        # vector
-        quat_vec = np.copy(quat_vec_original)
-        for i in range(len(RotOrder)):
-            quat_vec[i + 1] = quat_vec_original[RotOrder[i] + 1]
-        
-        # Since we are going from the body, to the inertial frame, we need to take the inverse of the
-        # quaternion, q (which is equivalent to its conjugate). We are going from the body frame to the
-        # interial frame since we the accelerations are measured w.r.t to the device (i.e. body frame)
-        # hence, to account for any rotations (w.r.t the initial position, which we interpret as the 
-        # inertial frame) we need to project our accelerations from the body frame to the inertial frame.
-        q0 = quat_vec[0]
-        q1 = quat_vec[1]
-        q2 = quat_vec[2]
-        q3 = quat_vec[3]
-
-        # Rotation Matrix
-        R_1 = [(q0*q0 + q1*q1 - q2*q2 -q3*q3), (2*(q1*q2 - q0*q3)), (2*(q0*q2 + q1*q3))]
-        R_2 = [(2*(q1*q2 + q0*q3)), (q0*q0 - q1*q1 + q2*q2 - q3*q3), (2*(q2*q3 - q0*q1))]
-        R_3 = [(2*(q1*q3 - q0*q2)), (2*(q0*q1 + q2*q3)), (q0*q0 - q1*q1 - q2*q2 + q3*q3)]
-
-        R = np.mat(np.vstack((R_1, R_2, R_3)))
-
-        return np.reshape(R*a_vec, (3,))
-
-
     
-    def ResampleData(self, DataFrame):
-        DF = DataFrame.copy(deep = True)
-        ResampledList = []
-        if self.INFO:
-            print("[INFO] Running Resampling...")
-            iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
-        else:
-            iterrows = DF.iterrows()
-        for i, row in iterrows:
-            _ResampledRow = self.ResampleRow(row)
-            ResampledList.append(_ResampledRow)
-
-        ResampledDF = pd.concat(ResampledList, axis = 1).transpose()
-        return ResampledDF
-
-
-
-    def ResampleRow(self, data_row):
-        self.Data2Resample = {'acceleration_z':'ACCELERATION_COLUMN',
-                              'acceleration_x':'ACCELERATION_X_COLUMN',
-                              'acceleration_y':'ACCELERATION_Y_COLUMN',
-                              'gyro_x':'GYRO_X_COLUMN',
-                              'gyro_y':'GYRO_Y_COLUMN',
-                              'gyro_z':'GYRO_Z_COLUMN'}
-        ResampledRow = data_row.copy(deep = True)
-        ResampledTime = self.AlignTimeArrays(data_row[self.constants['TIME_COLUMN']], data_row[self.constants['GYRO_TIME_COLUMN']], dt = 1)
-        ResampledRow[self.constants['TIME_COLUMN']] = ResampledTime
-        for key, value in self.Data2Resample.items():
-            if key.startswith('acceleration'):
-                try:
-                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['TIME_COLUMN']], ResampledTime)
-                except TypeError:
-                    pass
-            elif key.startswith('gyro'):
-                try:
-                    ResampledRow[self.constants[value]] = self.Interpolate(data_row[self.constants[value]], data_row[self.constants['GYRO_TIME_COLUMN']], ResampledTime)
-                except TypeError:
-                    pass
-            else:
-                pass
-        #Remove Gyro time column as it is now redundant 
-        ResampledRow.drop(self.constants['GYRO_TIME_COLUMN'])
-        return ResampledRow
-    
-
-
-    def Interpolate(self, y, x1, x2):
-        # Scan input data for nans, remove them from the array. The best we can do is interpolate these points with neighbors
-        y_nonan = y[np.invert(np.isnan(y))]
-        x1 = x1[np.invert(np.isnan(y))]
-        x1_nonan = x1[np.invert(np.isnan(x1))]
-        y_nonan = y_nonan[np.invert(np.isnan(x1))]
-
-        Bspline = spinter.splrep(x1_nonan, y_nonan)
-        y2 = spinter.splev(x2, Bspline)
-
-        return y2
-
-
-    # dt is in milliseconds 
-    def AlignTimeArrays(self, acc_time, gyro_time, dt = 1):
-        # All experiments should have accelerometer data, but in case they do not
-        # TODO: Add tags for participants with missing data, can be filtered out
-        try:
-            if len(acc_time) & len(gyro_time):
-                # Some devices (using Simple Accelerometer) do not have gyroscopic data
-                t_start = np.nanmax((acc_time[0], gyro_time[0]))
-                t_end = np.nanmin((acc_time[-1], gyro_time[-1]))
-                time_array = np.arange(t_start, t_end, dt)
-            elif len(acc_time):
-                t_start = acc_time[0]
-                t_end = acc_time[-1]
-                time_array = np.arange(t_start, t_end, dt)
-            else:
-                time_array = np.nan
-        except TypeError:
-            time_array = np.nan
-
-        return time_array
-
-    
-
+    # Function which handles the importing of the AAT data. 
     def ImportData(self):
         self._Data = []
         if self.INFO:
