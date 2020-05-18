@@ -249,26 +249,25 @@ class DataHandler:
 
         a_corrected = np.copy(a_vec) * 0
 
-        for i in range(len(a_vec[0])):
-            # Rotation Matrix
-            R_1 = [(q0[i]*q0[i] + q1[i]*q1[i] - q2[i]*q2[i] -q3[i]*q3[i]), (2*(q1[i]*q2[i] - q0[i]*q3[i])), (2*(q0[i]*q2[i] + q1[i]*q3[i]))]
-            R_2 = [(2*(q1[i]*q2[i] + q0[i]*q3[i])), (q0[i]*q0[i] - q1[i]*q1[i] + q2[i]*q2[i] - q3[i]*q3[i]), (2*(q2[i]*q3[i] - q0[i]*q1[i]))]
-            R_3 = [(2*(q1[i]*q3[i] - q0[i]*q2[i])), (2*(q0[i]*q1[i] + q2[i]*q3[i])), (q0[i]*q0[i] - q1[i]*q1[i] - q2[i]*q2[i] + q3[i]*q3[i])]
+        R_1 = np.array([(q0*q0 + q1*q1 - q2*q2 -q3*q3), (2*(q1*q2 - q0*q3)), (2*(q0*q2 + q1*q3))])
+        R_2 = np.array([(2*(q1*q2 + q0*q3)), (q0*q0 - q1*q1 + q2*q2 - q3*q3), (2*(q2*q3 - q0*q1))])
+        R_3 = np.array([(2*(q1*q3 - q0*q2)), (2*(q0*q1 + q2*q3)), (q0*q0 - q1*q1 - q2*q2 + q3*q3)])
 
-            R = np.mat(np.vstack((R_1, R_2, R_3)))
+        R_1 = R_1.T
+        R_2 = R_2.T
+        R_3 = R_3.T
 
-            a_corrected[:, i] = np.reshape(R*np.reshape(a_vec[:, i], (3, 1)), (3,))
+        R_stack = np.zeros((3*len(R_1), 3))
 
-        # R_1 = [(q0*q0 + q1*q1 - q2*q2 -q3*q3), (2*(q1*q2 - q0*q3)), (2*(q0*q2 + q1*q3))]
-        # R_2 = [(2*(q1*q2 + q0*q3)), (q0*q0 - q1*q1 + q2*q2 - q3*q3), (2*(q2*q3 - q0*q1))]
-        # R_3 = [(2*(q1*q3 - q0*q2)), (2*(q0*q1 + q2*q3)), (q0*q0 - q1*q1 - q2*q2 + q3*q3)]
+        R_stack[0:(3*len(R_1)):3] = R_1
+        R_stack[1:(3*len(R_1)):3] = R_2
+        R_stack[2:(3*len(R_1)):3] = R_3
 
-        # R_1 = np.array(R_1).reshape((len(a_vec[0]), 3))
-        # R_2 = np.array(R_2).reshape((len(a_vec[0]), 3))
-        # R_3 = np.array(R_2).reshape((len(a_vec[0]), 3))
-
-        # R = np.mat(np.vstack((R_1, R_2, R_3))).reshape((3, 3, len(a_vec[0])))
-        # a_corrected = np.reshape(R*np.reshape(a_vec, (3, len(a_vec[0]))), (3,))
+        R = R_stack.reshape((len(R_1), 3, 3))
+        
+        a_vecT = a_vec.T
+        a_corrected = np.matmul(R, a_vecT.reshape((len(R_1), 3, 1))).T
+        a_corrected = a_corrected.reshape(a_vec.shape)
 
         return a_corrected
 
