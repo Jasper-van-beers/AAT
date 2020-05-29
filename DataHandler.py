@@ -62,7 +62,11 @@ class DataHandler:
                         'GYRO_NOISE' : 'gyro_noise',
                         'ANGLE_X_COLUMN' : 'angle_x',
                         'ANGLE_Y_COLUMN' : 'angle_y',
-                        'ANGLE_Z_COLUMN' : 'angle_z'}
+                        'ANGLE_Z_COLUMN' : 'angle_z',
+                        'DISTANCE_X_COLUMN' : 'distance_x',
+                        'DISTANCE_Y_COLUMN' : 'distance_y',
+                        'DISTANCE_Z_COLUMN' : 'distance_z',
+                        'TOTAL_DISTANCE_COLUMN' : 'total_distance'}
         standard_cols = ['PARTICIPANT_COLUMN', 'DEVICE_COLUMN', 
                         'EXPERIMENT_COLUMN', 'CONDITION_COLUMN', 
                         'SIGNED_UP_COLUMN', 'SESSION_COLUMN']
@@ -157,10 +161,57 @@ class DataHandler:
     # Perhaps we can dynamics of system -> use kalman filter to estimate distance 
     # Use sensor fusion to get better state estimates -> Need additional data (e.g. Magnetometer; then we can implement
     # a madgwick filter)
-    def ComputeDistanceVelocity(self):
+    def ComputeDistance(self, DataFrame):
 
-        pass
-    
+        def integrate_acceleration(a_vec, t, scale = 1000.):
+            # Scale time (default time is in milliseconds -> convert to seconds)
+            t = t/scale
+            # Using physical equations (assume that acceleration for one time-step, dt, is constant)
+            v_vec = np.copy(a_vec) * 0
+            d_vec = np.copy(a_vec) * 0
+            for i in range(len(t)-1):
+                # Infer time step
+                dt = t[i + 1] - t[i]
+                v_vec[:, i + 1] = v_vec[:, i] + a_vec[:, i] * dt
+                d_vec[:, i + 1] = d_vec[:, i] + v_vec[:, i] * dt + 0.5 * a_vec[:, i] * dt ** 2 
+            return d_vec, v_vec
+
+        DF = DataFrame.copy(deep = True)
+
+        if self.INFO:
+            print('[INFO] Computing distances...')
+            iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
+        else:
+            iterrows = DF.iterrows()
+
+        DF_out_list = []
+
+        for idx, row in iterrows:
+            # Calculation of Distance and Velocity
+            _acc_vec = np.vstack((row[self.constants['ACCELERATION_X_COLUMN']],
+                    row[self.constants['ACCELERATION_Y_COLUMN']],
+                    row[self.constants['ACCELERATION_COLUMN']]))
+            _time_vec = row[self.constants['TIME_COLUMN']]
+            _distance, _velocity = integrate_acceleration(_acc_vec, _time_vec)
+            total_distance = np.sqrt(np.sum(np.square(_distance), axis = 0))
+
+            # Saving data to new dataframe
+            DataRow = row.copy(deep = True)
+
+            DataRow[self.constants['DISTANCE_X_COLUMN']] = _distance[0, :]
+            DataRow[self.constants['DISTANCE_Y_COLUMN']] = _distance[1, :]
+            DataRow[self.constants['DISTANCE_Z_COLUMN']] = _distance[2, :]
+            DataRow[self.constants['TOTAL_DISTANCE_COLUMN']] = total_distance
+            
+            # import code
+            # code.interact(local=locals())
+
+            DF_out_list.append(DataRow)
+
+        DF_out = pd.concat(DF_out_list, axis = 1).transpose()
+
+        return DF_out
+
     
     def Correct4Rotations(self, DataFrame, StoreTheta = True):
         DF = DataFrame.copy(deep = True)
@@ -470,7 +521,7 @@ class DataHandler:
     #                   In this case we take max(RTResLB, RTHeightThresRatio) as the minimum
     #                   peak height
     #               RTPeakDistance = Minimum allowed distance between peaks (in milliseconds)
-    def ComputeRT(self, DataFrame, RTResLB = 1, RTHeightThresRatio = 0.5, RTPeakDistance = 10):
+    def ComputeRT(self, DataFrame, RTResLB = 1, RTHeightThresRatio = 0.3, RTPeakDistance = 10):
         DF = DataFrame.copy(deep = True)
         if self.INFO:
             print("[INFO] Computing Reaction Times...")
