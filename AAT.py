@@ -12,6 +12,12 @@ import scipy.interpolate as spinter
 import scipy.signal as spsig
 from tqdm import tqdm
 
+from mpl_toolkits import mplot3d
+from matplotlib import pyplot as plt
+from matplotlib import animation as animation
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
+import matplotlib as mpl
+
 # Class to handle importing, filtering, and pre-processing of data from the AAT
 class DataImporter:
 
@@ -138,6 +144,13 @@ class DataImporter:
     def RenameDFCols(self):
         # Add something to rename acceleration column to acceleration_z
         pass
+
+
+    
+    # Utility function to construct a new data frame from specified columns
+    def ExtractDFCols(self, DF, Cols):
+        NewDF = pd.concat(DF[Cols], axis = 1)
+        return NewDF
 
 
     # Utility function to check if all the expected information is found in a dictionary
@@ -1037,7 +1050,306 @@ class DataImporter:
         return self.jsonfile
 
 
+# Class to facilitate plotting of the AAT data
 class Plotter:
 
-    def __init__(self):
-        pass
+    def __init__(self, constants):
+        self.constants = constants
+
+
+    # Function to display plots
+    def ShowPlots(self):
+        plt.show()
+        return None
+
+
+    # Function to plot the acceleration, in the x, y, and z directions, as a function of time
+    # Units: Acceleration in m/s^2 and Time in ms (milliseconds)
+    def AccelerationTime(self, participant, DF):
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+        IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
+
+        plt.figure()
+        plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_X_COLUMN']][participant], label = 'X')
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_Y_COLUMN']][participant], label = 'Y')
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_COLUMN']][participant], label = 'Z')
+        
+        plt.legend()
+        plt.grid()
+        plt.xlabel('Time [ms]')
+        plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+
+        return None
+
+
+    # Function to plot the displacement, in the x, y, and z directions, as a function of time
+    # Units: Displacement in cm and Time in ms (milliseconds)
+    def DistanceTime(self, participant, DF, Threshold = 60):
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+        IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
+
+        # Define data points which represent realistic limits of maximum distance
+        Distance_UpperBound = DF[self.constants['TIME_COLUMN']][participant] * 0 + Threshold
+        Distance_LowerBound = DF[self.constants['TIME_COLUMN']][participant] * 0 - Threshold
+
+        max_dist = np.max([np.max(np.abs(DF[self.constants['DISTANCE_X_COLUMN']][participant]*100)), np.max(np.abs(DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100)), np.max(np.abs(DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100))])
+
+        plt.figure()
+        plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_X_COLUMN']][participant]*100, label = 'X')
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100, label = 'Y')
+        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100, label = 'Z')
+        
+        # Plot threshold limits only if maximum distance is close to these limits
+        if max_dist >= 0.8*Threshold:
+            plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_UpperBound, color = 'k', linestyle = '--', label = 'Maximum Realistic Distance')
+            plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_LowerBound, color = 'k', linestyle = '--')
+
+        plt.legend()
+        plt.grid()
+        plt.xlabel('Time [ms]')
+        plt.ylabel(r'Distance [cm]')
+        
+        return None
+
+
+    # Function to plot the trajectory, in 3D, of the AAT movement. 
+    # Since the 3D plot spans dimensions x, y, and z, the temporal information is not explicitly present in
+    # this trajectory
+    # There are two options to include the temporal information
+    # By Default (Gradient = False), the script will add two colored points which correspond to the start 
+    # and end of the movement. 
+    # The exact mapping of color to start/stop will be displayed on the legend
+    # If Gradient = True, then the temporal information will be illustrated through the line color of the 
+    # trajectory. The color map used can be specified by ColorMap. Again, two points will be displayed which
+    # indicate the start and end of the movement. The colors will be matched to the extremes of ColorMap
+    #
+    # Alternatively, AnimateTrajectory3D can be used to show the propagation of the trajectory in time. 
+    def Trajectory3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r'):
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+        X = DF[self.constants['DISTANCE_X_COLUMN']][participant]*100
+        Y = DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100
+        Z = DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100
+        time = DF[self.constants['TIME_COLUMN']][participant]
+
+        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+        if Gradient:
+            points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
+            # Map points to line segments of neighboring points (e.g. point i with point i + 1)
+            segments = np.concatenate([points[:-1], points[1:]], axis = 1)
+            # Make collection of line segments
+            lc = Line3DCollection(segments, cmap=ColorMap)
+            # Color segments based on time
+            lc.set_array(time)
+
+        plt.figure()
+        ax = plt.axes(projection = '3d')
+        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+        
+        # If we want to represent time as a color gradient on the trajectory
+        if Gradient:
+            cmap = mpl.cm.get_cmap(ColorMap)
+            ax.add_collection3d(lc)
+            # Indicate where the motion began and where it ended, since temporal information is not displayed 
+            ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement (t = {} [ms])'.format(time[0]))
+            ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement (t = {} [ms])'.format(time[-1]))
+        else:
+            ax.plot3D(Z, Y, X, label = 'Trajectory (displacement)')
+            # Indicate where the motion began and where it ended, since temporal information is not displayed 
+            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement (t = {} [ms])'.format(time[0]))
+            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement (t = {} [ms])'.format(time[-1]))
+        
+        ax.legend()
+        ax.set_xlim3d(min_val, max_val)
+        ax.set_ylim3d(min_val, max_val)
+        ax.set_zlim3d(min_val, max_val)
+        ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+        ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+        ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+
+        return None
+
+
+    # Function to plot the acceleration, in 3D, of the AAT movement. 
+    # Since the 3D plot spans dimensions x, y, and z, the temporal information is not explicitly present here
+    # There are two options to include the temporal information:
+    # By Default (Gradient = False), the script will add two colored points which correspond to the start 
+    # and end of the movement. 
+    # The exact mapping of color to start/stop will be displayed on the legend
+    # If Gradient = True, then the temporal information will be illustrated through the line color of the 
+    # 3D acceleration. The color map used can be specified by ColorMap. Again, two points will be displayed 
+    # which indicate the start and end of the movement. The colors will be matched to the extremes of ColorMap
+    #
+    # Alternatively, AnimateAcceleration3D can be used to show the propagation of acceleration in time. 
+    def Acceleration3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r'):
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+        X = DF[self.constants['ACCELERATION_X_COLUMN']][participant]
+        Y = DF[self.constants['ACCELERATION_Y_COLUMN']][participant]
+        Z = DF[self.constants['ACCELERATION_COLUMN']][participant]
+        time = DF[self.constants['TIME_COLUMN']][participant]
+
+        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+        if Gradient:
+            points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
+            # Map points to line segments of neighboring points (e.g. point i with point i + 1)
+            segments = np.concatenate([points[:-1], points[1:]], axis = 1)
+            # Make collection of line segments
+            lc = Line3DCollection(segments, cmap=ColorMap)
+            # Color segments based on time
+            lc.set_array(time)
+
+        plt.figure()
+        ax = plt.axes(projection = '3d')
+        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+        
+        # If we want to represent time as a color gradient on the trajectory
+        if Gradient:
+            cmap = mpl.cm.get_cmap(ColorMap)
+            ax.add_collection3d(lc)
+            # Indicate where the motion began and where it ended, since temporal information is not displayed 
+            ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement (t = {} [ms])'.format(time[0]))
+            ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement (t = {} [ms])'.format(time[-1]))
+        else:
+            ax.plot3D(Z, Y, X, label = 'Acceleration')
+            # Indicate where the motion began and where it ended, since temporal information is not displayed 
+            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement (t = {} [ms])'.format(time[0]))
+            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement (t = {} [ms])'.format(time[-1]))
+
+        ax.legend()
+        ax.set_xlim3d(min_val, max_val)
+        ax.set_ylim3d(min_val, max_val)
+        ax.set_zlim3d(min_val, max_val)
+        ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+        ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+        ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+
+        return None
+
+
+    # Function to show the 3D propagation of displacement in time of the AAT movement.
+    # Inputs:   Participant = Index in the dataframe, DF, that we would like to plot
+    #           DF = DataFrame containing the AAT data
+    #           UseBlit = Boolean to use blit when rendering animation. Typically, 
+    #               UseBilt = True will result in a faster and smoother animation
+    #               but it does not allow free movement around the plot. To see
+    #               other regions of the plot, set UseBilt = False or modify the 
+    #               input 'View'
+    #           View = Parameters to set the 'camera' view of the 3D plot by specifying
+    #               the elevation and azimuth. Here, View = [elevation, azimuth]
+    #           Save = Boolean which dictates whether the animation should be saved or not
+    # Output:   An animation of the trajectory, as a function of time. 
+    def AnimateTrajectory3D(self, participant, DF, UseBlit=False, View=[20, -60], Save=False):
+        # Function to update data being shown in the plot
+        def update(num, data, line):
+            line.set_data(data[:2, :num])
+            line.set_3d_properties(data[2, :num])
+            return line, 
+
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+        X = DF[self.constants['DISTANCE_X_COLUMN']][participant]*100
+        Y = DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100
+        Z = DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100
+        time = DF[self.constants['TIME_COLUMN']][participant]
+
+        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+        MovFig = plt.figure()
+        ax = mplot3d.axes3d.Axes3D(MovFig)
+
+        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+
+        data3Dim = np.array([Z, Y, X])
+        lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label='Trajectory')
+
+        ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+        ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+        ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+        ax.set_xlim3d(min_val, max_val)
+        ax.set_ylim3d(min_val, max_val)
+        ax.set_zlim3d(min_val, max_val)
+
+        # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+        ax.view_init(elev=View[0], azim=View[1])
+        
+        ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+        line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
+        plt.show()
+
+        if Save:
+            line_animation.save('Trajectory_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+
+        return None
+
+    # Function to show the 3D propagation of acceleration in time of the AAT movement.
+    # Inputs:   Participant = Index in the dataframe, DF, that we would like to plot
+    #           DF = DataFrame containing the AAT data
+    #           UseBlit = Boolean to use blit when rendering animation. Typically, 
+    #               UseBilt = True will result in a faster and smoother animation
+    #               but it does not allow free movement around the plot. To see
+    #               other regions of the plot, set UseBilt = False or modify the 
+    #               input 'View'
+    #           View = Parameters to set the 'camera' view of the 3D plot by specifying
+    #               the elevation and azimuth. Here, View = [elevation, azimuth]
+    #           Save = Boolean which dictates whether the animation should be saved or not
+    # Output:   An animation of the 3D acceleration, as a function of time. 
+    def AnimateAcceleration3D(self, participant, DF, UseBlit=False, View=[20, -60], Save=False):
+        # Function to update data being shown in the plot
+        def update(num, data, line):
+            line.set_data(data[:2, :num])
+            line.set_3d_properties(data[2, :num])
+            return line, 
+
+        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+        X = DF[self.constants['ACCELERATION_X_COLUMN']][participant]
+        Y = DF[self.constants['ACCELERATION_Y_COLUMN']][participant]
+        Z = DF[self.constants['ACCELERATION_COLUMN']][participant]
+        time = DF[self.constants['TIME_COLUMN']][participant]
+
+
+        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+        MovFig = plt.figure()
+        ax = mplot3d.axes3d.Axes3D(MovFig)
+
+        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+
+        data3Dim = np.array([Z, Y, X])
+        lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label = 'Acceleration')
+
+        ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+        ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+        ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+        ax.set_xlim3d(min_val, max_val)
+        ax.set_ylim3d(min_val, max_val)
+        ax.set_zlim3d(min_val, max_val)
+
+        # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+        ax.view_init(elev=View[0], azim=View[1])
+        
+        ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+        line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
+        plt.show()
+
+        if Save:
+            line_animation.save('3DAcceleration_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+
+        return None
