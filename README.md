@@ -11,5 +11,8 @@ This module is still a work in progress, and not many features have been include
 - Filtering for missing data
 - Filtering for unrealistic reaction times (default set to 200 ms)
 - Filtering for unrealistic forces (e.g. sustained average acceleration of 5 m/s^2 over 2 seconds, which is not possible with the movements involved with the experiment)
-- Corrections for acceleration
+- Offset corrections for acceleration (offset corrections, based on the assumption that the device is still at the beginning of a trial)
 - Resampling of the accelerometer and gyroscope data, including a unification of their respective time arrays
+- Angle corrections for acceleration, using quaternions, which occur due to (any) rotations of the phone during the trial (All rotations are made with respect to the initial orientation at the beginning of the trial, and thus represent relative angle changes). 
+- Distance computations, obtained from (angled corrected) accelerometer data. NOTE: These distance computations are rather unreliable at the moment since they are dervied from the double integration of the acceleration data. Therefore, errors (from noise and bias) scale with time squared. Even though each trial only runs for ~2 seconds, the distances we are interested in a quite small (in the order of centimeters) and thus are still quite susceptible to the errors. This can be improved with addtional sensor data (e.g. magnetometer), so until this is present, the computed distances will remain unreliable. 
+- The plotting of Acceleration-Time, Distance-Time, 3D trajectory, 3D acceleration, and animations of 3D acceleration and 3D trajectory
