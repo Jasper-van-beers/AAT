@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 import json
-import scipy._Interpolate as spinter
+import scipy.interpolate as spinter
 import scipy.signal as spsig
 from tqdm import tqdm
 
@@ -591,6 +591,8 @@ class DataImporter:
     # Output:   DF = Filtered DataFrame with NaN data removed
     def FilterNaNs(self, DataFrame):
         DF = DataFrame.copy(deep = True)
+
+        N = DF.shape[0]
 
         # Find NaN values in the relevant columns (DataCols2Check) of the dataframe
         # Most important columns are accelerations and time (corresponding to acceleration)
