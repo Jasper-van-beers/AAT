@@ -282,41 +282,49 @@ class DataImporter:
         AngleThreshold = 1*np.pi/180.
 
         for idx, row in iterrows:
-            # If there is gyroscopic data available, compute rotations 
-            if len(row[self.constants['GYRO_X_COLUMN']]):
-                # Create angular rate vector
-                _gyro_vec = np.vstack((row[self.constants['GYRO_X_COLUMN']],
-                                    row[self.constants['GYRO_Y_COLUMN']],
-                                    row[self.constants['GYRO_Z_COLUMN']]))
-                # Create acceleration vector
-                _acc_vec = np.vstack((row[self.constants['ACCELERATION_X_COLUMN']],
-                                    row[self.constants['ACCELERATION_Y_COLUMN']],
-                                    row[self.constants['ACCELERATION_COLUMN']]))
-                # Integrate angular rates to get angles
-                _th_vec = self._IntegrateGyro(row[self.constants['TIME_COLUMN']], _gyro_vec, InitialTheta, scale = 1000)
-                # Apply rotation correction to the acceleration data 
-                _CAcc_vec = self._ApplyRotationCorrection(_acc_vec, _th_vec, AngleThreshold=AngleThreshold)
-                DataRow = row.copy(deep = True)
+            # If there is gyroscopic data available, compute rotations
+            try: 
+                if len(row[self.constants['GYRO_X_COLUMN']]):
+                    # Create angular rate vector
+                    _gyro_vec = np.vstack((row[self.constants['GYRO_X_COLUMN']],
+                                        row[self.constants['GYRO_Y_COLUMN']],
+                                        row[self.constants['GYRO_Z_COLUMN']]))
+                    # Create acceleration vector
+                    _acc_vec = np.vstack((row[self.constants['ACCELERATION_X_COLUMN']],
+                                        row[self.constants['ACCELERATION_Y_COLUMN']],
+                                        row[self.constants['ACCELERATION_COLUMN']]))
+                    # Integrate angular rates to get angles
+                    _th_vec = self._IntegrateGyro(row[self.constants['TIME_COLUMN']], _gyro_vec, InitialTheta, scale = 1000)
+                    # Apply rotation correction to the acceleration data 
+                    _CAcc_vec = self._ApplyRotationCorrection(_acc_vec, _th_vec, AngleThreshold=AngleThreshold)
+                    DataRow = row.copy(deep = True)
 
-                # Replace old acceleration values with corrected acceleration values 
-                DataRow[self.constants['ACCELERATION_X_COLUMN']] = _CAcc_vec[0, :]
-                DataRow[self.constants['ACCELERATION_Y_COLUMN']] = _CAcc_vec[1, :]
-                DataRow[self.constants['ACCELERATION_COLUMN']] = _CAcc_vec[2, :]
+                    # Replace old acceleration values with corrected acceleration values 
+                    DataRow[self.constants['ACCELERATION_X_COLUMN']] = _CAcc_vec[0, :]
+                    DataRow[self.constants['ACCELERATION_Y_COLUMN']] = _CAcc_vec[1, :]
+                    DataRow[self.constants['ACCELERATION_COLUMN']] = _CAcc_vec[2, :]
 
-                # If the user opted to save the angles, add these to new 'angle' columns
-                # in the dataframe
-                if StoreTheta:
-                    DataRow[self.constants['ANGLE_X_COLUMN']] = _th_vec[0, :]
-                    DataRow[self.constants['ANGLE_Y_COLUMN']] = _th_vec[1, :]
-                    DataRow[self.constants['ANGLE_Z_COLUMN']] = _th_vec[2, :]
-            # For cases where there is no gyroscopic data, no angular corrections can be made
-            # (Since the gravity vector is also not known)    
-            else:
-                if StoreTheta:
-                    DataRow[self.constants['ANGLE_X_COLUMN']] = np.nan
-                    DataRow[self.constants['ANGLE_Y_COLUMN']] = np.nan
-                    DataRow[self.constants['ANGLE_Z_COLUMN']] = np.nan
-                DataRow = row.copy(deep = True)
+                    # If the user opted to save the angles, add these to new 'angle' columns
+                    # in the dataframe
+                    if StoreTheta:
+                        DataRow[self.constants['ANGLE_X_COLUMN']] = _th_vec[0, :]
+                        DataRow[self.constants['ANGLE_Y_COLUMN']] = _th_vec[1, :]
+                        DataRow[self.constants['ANGLE_Z_COLUMN']] = _th_vec[2, :]
+                # For cases where there is no gyroscopic data, no angular corrections can be made
+                # (Since the gravity vector is also not known)    
+                else:
+                    if StoreTheta:
+                        DataRow[self.constants['ANGLE_X_COLUMN']] = np.nan
+                        DataRow[self.constants['ANGLE_Y_COLUMN']] = np.nan
+                        DataRow[self.constants['ANGLE_Z_COLUMN']] = np.nan
+                    DataRow = row.copy(deep = True)
+                    
+            except TypeError:
+                    if StoreTheta:
+                        DataRow[self.constants['ANGLE_X_COLUMN']] = np.nan
+                        DataRow[self.constants['ANGLE_Y_COLUMN']] = np.nan
+                        DataRow[self.constants['ANGLE_Z_COLUMN']] = np.nan
+                    DataRow = row.copy(deep = True)
 
             CorrectedDataList.append(DataRow)
 
@@ -580,7 +588,12 @@ class DataImporter:
             else:
                 time_array = np.nan
         except TypeError:
-            time_array = np.nan
+            if len(acc_time):
+                t_start = acc_time[0]
+                t_end = acc_time[-1]
+                time_array = np.arange(t_start, t_end, dt)
+            else:
+                time_array = np.nan
 
         return time_array
 
@@ -865,6 +878,14 @@ class DataImporter:
         # Make a copy of the data frame (such that we do not make changes to the input data frame directly)
         DF = Data.copy(deep = True)
 
+        # Check if reaction times have been previously computed. Otherwise, compute the reaction times 
+        try:
+            if Data['rt'][0] > 0:
+                pass
+        except KeyError:
+            print('[WARNING] The inputted DataFrame for <FilterData> does not have a reaction time column.\n\tI will try to compute reaction times here.\n\tNOTE: Default values are being used.')
+            DF = self.ComputeRT(DF)
+
         # If the user as opted to display information
         if self.INFO:
             print("[INFO] Running Filtering...")
@@ -886,14 +907,6 @@ class DataImporter:
         # valid trials can be removed based on MinDataRatio cutoff. 
         ParticipantIDX = []
         PreviousParticipantName = 'DummyParticipant'
-
-        # Check if reaction times have been previously computed. Otherwise, compute the reaction times 
-        try:
-            if DF['rt'][0] > 0:
-                pass
-        except KeyError:
-            print('[WARNING] The inputted DataFrame for <FilterData> does not have a reaction time column.\n\tI will try to compute reaction times here.\n\tNOTE: Default values are being used.')
-            DF = self.ComputeRT(DF)
 
         for i, row in iterrows:
             # Get current participant name
