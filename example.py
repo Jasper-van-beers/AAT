@@ -77,7 +77,6 @@ SaveDirectory = '\\'.join(os.getcwd().split('\\')[:-1])
 
 # PreprocessedData = DataImporter.LoadDF('PreprocessedData.pkl', SaveDirectory)
 
-
 # Now that we have preprocessed the data, we can plot some results! 
 TrialPoint = 5
 
@@ -110,3 +109,104 @@ Plot.ShowPlots()
 Plot.AnimateAcceleration3D(TrialPoint, PreprocessedData)
 
 Plot.AnimateTrajectory3D(TrialPoint, PreprocessedData)
+
+
+# So far, we have only looked at individual trials of participants
+# It is more insightful to look at their averages over the 
+# various conditions. For example, the average of their Reaction
+# Time for all Pull happy trials. To average the data (within 
+# participant) for each condition, we may use the following
+# function from the DataImporter class
+#
+# Here we input the preprocessed data. We also need to specify the 
+# controls (e.g. angry) and targets (e.g. happy) such that the
+# relevant conditional columns can be generated. These should
+# correspond to the control and target names in the raw data
+# (note, that this is also case sensitive!)
+
+WithinPAvgData = DataImporter.AverageWithinParticipant(PreprocessedData, 'angry', 'happy')
+# Now that the columns are different, we can inspect them. Here:
+#       'PID' = Participant ID
+#       'time' = Unified time array
+#       'Acc ___ ___' = Acceleration for push/pull for control/target
+#       'Dist ___ ___' = Distance for push/pull for control/target
+#       'RT ___ ___' = Reaction time for push/pull for control/target
+print('New column names: {}'.format(WithinPAvgData.columns))
+
+# We can make use of the same plotting functions to illustrate this averaged data
+# In this case, we can specify some additional parameters:
+#       axis = ['X', 'Y', 'Z'] -> What axes to plot
+#       movement = ['Push', 'Pull'] -> What movements to plot
+#       stimulus = ['control', 'target'] -> What stimuli to plot 
+ParticipantNum = 20 # Example participant
+Plot.AccelerationTime(ParticipantNum, WithinPAvgData, axis = ['Z'], movement = ['Pull'], stimulus = ['happy', 'angry'])
+Plot.DistanceTime(ParticipantNum, WithinPAvgData, axis = ['Z'], movement = ['Pull', 'Push'], stimulus = ['angry'])
+Plot.ShowPlots()
+
+# The 3D plots follow a similar format, but without specifying the axis
+Plot.Acceleration3D(ParticipantNum, WithinPAvgData, movement = ['Pull'], stimulus = ['happy', 'angry'])
+Plot.Trajectory3D(ParticipantNum, WithinPAvgData, movement = ['Pull', 'Push'], stimulus = ['angry'])
+Plot.ShowPlots()
+
+# Likewise, we can animate these movements
+Plot.AnimateAcceleration3D(ParticipantNum, WithinPAvgData, UseBlit=True, movement = ['Pull'], stimulus=['happy', 'angry'])
+Plot.AnimateTrajectory3D(ParticipantNum, WithinPAvgData, UseBlit=True, movement = ['Pull'], stimulus=['happy', 'angry'])
+
+# We can go one step further, and compute the averages across pariticpants
+# To do this, we make use of the following function. Here, we must input the 
+# data that has already been averaged within participants 
+AveragedData = DataImporter.AverageBetweenParticipant(WithinPAvgData, 'angry', 'happy')
+
+# In this case, there is only one 'participant' (PID = 'Average') therefore:
+ParticipantNum = 0
+# Again we may plot the same plots using the Plotter class
+Plot.AccelerationTime(ParticipantNum, AveragedData, axis = ['Z'], movement = ['Pull'], stimulus = ['happy', 'angry'])
+Plot.DistanceTime(ParticipantNum, AveragedData, axis = ['Z'], movement = ['Pull', 'Push'], stimulus = ['angry'])
+
+Plot.Acceleration3D(ParticipantNum, AveragedData, movement = ['Pull'], stimulus = ['happy', 'angry'])
+Plot.Trajectory3D(ParticipantNum, AveragedData, movement = ['Pull', 'Push'], stimulus = ['angry'])
+Plot.ShowPlots()
+
+Plot.AnimateAcceleration3D(ParticipantNum, AveragedData, UseBlit=True, movement = ['Pull'], stimulus=['happy', 'angry'])
+Plot.AnimateTrajectory3D(ParticipantNum, AveragedData, UseBlit=True, movement = ['Pull'], stimulus=['happy', 'angry'])
+
+
+
+# Another plotting utility that we have yet to discuss is the ApproachAvoidanceXZ plot
+# In this case, plot the trajectory/acceleration of the movement in the X and Z axis
+# (Think of it as looking at the participant from the side, where x is the vertical 
+# movment and z is the lateral movement). This function works with the preprocessed data
+# or the averaged data 
+# Here, we need to add an additional parameter:
+#       metric = 'distance' or 'acceleration' -> indicates which trace to plot
+# If distance is selected, then the plot also shows the (approximate) regions in the graph
+# which correspond to an overall 'avoidance' or 'approach' movement (Based on the distance
+# between the user and the device)
+Plot.ApproachAvoidanceXZ('distance', ParticipantNum, AveragedData, movement =  ['Pull', 'Push'], stimulus = ['happy', 'angry'])
+Plot.ShowPlots()
+
+# If we wish to plot multiple plots in one figure, this is also possible with the 
+# MultiPlot function (Note: this does not work for the animations).
+# In this case, we need input the following:
+#       Layout = A tuple of the grid that we want to use: (nrows, ncolumns)
+#       Functions = List of plot functions
+#       FuncArgs = List of dictionaries containing the function arguments, 
+#                   the order should correspond with the list of functions
+
+# Example 2x2 plot
+Funcs = [Plot.AccelerationTime, Plot.Acceleration3D, Plot.DistanceTime, Plot.Trajectory3D]
+FuncArgs = [{'participant':ParticipantNum, 'DF':AveragedData, 'axis':['Z'], 'movement':['Pull'], 'stimulus':['happy', 'angry']},
+            {'participant':ParticipantNum, 'DF':AveragedData, 'movement':['Pull'], 'stimulus':['happy', 'angry']},
+            {'participant':ParticipantNum, 'DF':AveragedData, 'axis':['Z'], 'movement':['Pull'], 'stimulus':['happy', 'angry']},
+            {'participant':ParticipantNum, 'DF':AveragedData, 'movement':['Pull'], 'stimulus':['happy', 'angry']}]
+
+Plot.MultiPlot((2, 2), Funcs, FuncArgs)
+Plot.ShowPlots()
+
+# Example 2x1 plot
+Funcs = [Plot.AccelerationTime, Plot.ApproachAvoidanceXZ]
+FuncArgs = [{'participant':ParticipantNum, 'DF':AveragedData, 'axis':['Z'], 'movement':['Pull'], 'stimulus':['happy', 'angry']},
+            {'metric':'distance','participant':ParticipantNum, 'DF':AveragedData, 'movement':['Pull'], 'stimulus':['happy', 'angry']}]
+
+Plot.MultiPlot((2, 1), Funcs, FuncArgs)
+Plot.ShowPlots()
