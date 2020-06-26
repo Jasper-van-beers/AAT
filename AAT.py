@@ -166,6 +166,230 @@ class DataImporter:
         pass
 
 
+
+    def AverageBetweenParticipant(self, DFWithinParticipant, Control, Target):
+        DF = DFWithinParticipant.copy(deep = True)
+
+        if self.INFO:
+            print('[INFO] Averaging results between participants')
+
+        try:
+            _dummy = DF['Acc Pull {}'.format(Control)]
+            _dummy = DF['Acc Pull {}'.format(Target)]
+        except KeyError:
+            print('[WARNING] in function <AverageBetweenParticipant> - Inputted DataFrame has not yet been averaged within participants')
+            print('\t Attempting to average within participants, calling <AverageWithinParticipant>...')
+            DF = self.AverageWithinParticipant(DFWithinParticipant, Control, Target)
+        
+        DF = DF.set_index(['PID'])
+        
+        if self.INFO:
+            iterations = tqdm(DF.index)
+        else:
+            iterations = DF.index
+
+        N = len(DF)
+        times = DF['time']
+
+        maxT = np.max(times.map(np.max))
+        minT = np.min(times.map(np.min))
+
+        dt = 1
+        unifiedTime = np.arange(minT, maxT + dt, dt)
+        unifiedTime = unifiedTime.reshape((1, len(unifiedTime)))
+        dataHost = unifiedTime.copy() * 0
+
+        # Create empty dictionary to store data
+        data = {}
+        for col in DF.columns:
+            data.update({col:[]})
+        
+        FactorMap = {}
+        MissingData = np.sum(DF.isnull())
+        for idx, col in enumerate(DF.columns):
+            FactorMap.update({col:(1/(N - MissingData[idx]))})
+        
+
+        for pIdx, pid in enumerate(iterations):
+            pData = DF.loc[pid, :]
+            pTime = pData['time']
+            try:
+                pStartIdx = np.where(unifiedTime[0] >= pTime[0])[0][0]
+                pEndIdx = np.where(unifiedTime[0] >= pTime[-1])[0][0] + 1
+            # If this error arises, it means that there is no time data (participant only
+            # completed practice trials)
+            # TODO: Flag for removal
+            except TypeError:
+                pass
+
+
+            for cIdx, col in enumerate(pData.index):
+                try:
+                    # We are dealing with values (e.g. RT)
+                    if len(pData[col].shape) == 0:
+                        surrogateData = pData[col] * FactorMap[col]
+                        ax = None
+
+                    # # Then we are dealing with a 1-d array (time)
+                    elif col == 'time':
+                        surrogateData = unifiedTime.copy() * FactorMap[col]
+                        ax = 1
+                    # Otherwise, we need to loop through entries of n-d array
+                    else:
+                        n = len(pData[col])
+                        # Create n copies of surrogateData to be filled in
+                        tup = []
+                        for row in range(pData[col].shape[0]):
+                            tup.append(dataHost.copy())
+                        surrogateData = np.vstack(tuple(tup))
+                        surrogateData[:, pStartIdx:pEndIdx] = pData[col] * FactorMap[col]
+                        ax = 1
+                # When value error is raised, there is no data for that column, so leave data empty
+                except AttributeError:
+                    surrogateData = data[col]
+                    # import code
+                    # code.interact(local=locals())
+                
+                if pIdx != 0:
+                    oldData = data[col]
+                    newData = oldData.copy()
+                    if ax:
+                        for row in range(surrogateData.shape[0]):
+                            newData[row] = np.nansum(np.vstack((oldData[row], surrogateData[row])), axis = (ax-1))
+                    else:
+                        if not np.isnan(pData[col]):
+                            newData = np.nansum(np.vstack((oldData, surrogateData)))
+                else: 
+                    newData = surrogateData
+
+                data.update({col : newData})
+
+        
+        data.update({'PID' : 'Average'})
+        AvgDF = pd.DataFrame(data=[data.values()], columns=data.keys())
+
+        return AvgDF
+
+
+
+    def AverageWithinParticipant(self, DataFrame, Control, Target):
+        DF = DataFrame.copy(deep = True)
+        DFByPID = DF.set_index([self.constants['PARTICIPANT_COLUMN']])
+        UniquePIDs = np.unique(DF[self.constants['PARTICIPANT_COLUMN']])
+
+        if self.INFO:
+            print('[INFO] Averaging results within participants...')
+            iterations = tqdm(UniquePIDs)
+        else:
+            iterations = UniquePIDs
+
+        NumParticipants = len(UniquePIDs)
+        metrics = {'Acc' : [np.array(np.nan)]*NumParticipants, 
+                   'Dist' : [np.array(np.nan)]*NumParticipants, 
+                   'RT' : np.nan}
+        movements = ['Push', 'Pull']
+
+        Cols = {'PID' : ' ',
+                'time' : [np.array(np.nan)]*NumParticipants}
+        for mov in movements:
+            for m in metrics.keys():
+                Cols.update({'{} {} {}'.format(m, mov, Control) : metrics[m]})
+                Cols.update({'{} {} {}'.format(m, mov, Target) : metrics[m]})
+
+        Data = []
+
+        for idx, pid in enumerate(iterations):
+            ParticipantData = DFByPID.loc[pid, :]
+            N = len(ParticipantData)
+            PracticeIdx = np.where(DFByPID.loc[pid, 'is_practice'])[0]
+            AllIdx = np.arange(0, N, 1)
+            AllIdx = np.delete(AllIdx, PracticeIdx)
+            ParticipantData = ParticipantData.iloc[AllIdx, :]
+            times = ParticipantData[self.constants['TIME_COLUMN']]
+            maxT = np.max(times.map(max))
+            minT = np.min(times.map(min))
+
+            # Some participants didn't even get past the practice trials
+            if len(AllIdx) > 0:
+                dt = 1
+                UnifiedTime = np.arange(minT, maxT + dt, dt)
+                
+                Data.append(Cols.copy())
+                Data[idx]['PID'] = pid
+                Data[idx]['time'] = UnifiedTime
+
+                for mov in movements:
+                    C_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Control)
+                    T_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Target)
+                    for i, m in enumerate(metrics):
+                        Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[i]
+                        Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[i]
+            else:
+                Data.append(Cols.copy())
+                for col in Cols.keys():
+                    Data[-1][col] = np.nan
+                Data[-1]['PID'] = pid
+        
+        OutDF = pd.DataFrame(Data)
+
+        return OutDF
+
+
+
+    def _AverageOverCondition(self, participantData, unifiedTime, movement, stimulus):
+        movementIdx = np.where(participantData[self.constants['CORRECT_RESPONSE_COLUMN']] == movement)[0]
+        stimulusIdx = np.where(participantData[self.constants['STIMULUS_SET_COLUMN']] == stimulus)[0]
+        conditionIdx = np.intersect1d(movementIdx, stimulusIdx)
+
+        condData = participantData.iloc[conditionIdx, :]
+        N = len(condData)
+
+        if N > 0:
+            times = condData[self.constants['TIME_COLUMN']]
+            # # Get minimum and maximum of time series
+            # maxT = np.max(times.map(max))
+            # minT = np.min(times.map(min))
+
+            # dt = 1
+            # unifiedTime = np.arange(minT, maxT + dt, dt)
+
+            # Acc = np.zeros((3, N, len(unifiedTime))) * np.nan
+            # Dist = np.zeros((3, N, len(unifiedTime))) * np.nan
+
+            Acc = np.zeros((3, N, len(unifiedTime)))
+            Dist = np.zeros((3, N, len(unifiedTime)))
+
+            for i in range(N):
+                startIdx = np.where(unifiedTime >= times[i][0])[0][0]
+                endIdx = np.where(unifiedTime >= times[i][-1])[0][0] + 1
+
+                iData = condData.iloc[i, :]
+
+                Acc[0, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_X_COLUMN']]
+                Acc[1, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_Y_COLUMN']]
+                Acc[2, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_COLUMN']]
+
+                Dist[0, i, startIdx:endIdx] = iData[self.constants['DISTANCE_X_COLUMN']]
+                Dist[1, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Y_COLUMN']]
+                Dist[2, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Z_COLUMN']]
+
+            # Runtime warnings may appear due to this averaging, since there could instances where
+            # we are averaging arrays of just nans. 
+            AvgAcc = np.nanmean(Acc, axis = 1)
+            AvgDist = np.nanmean(Dist, axis = 1)
+
+            RTs = condData[self.constants['RT_COLUMN']]
+            AvgRT = np.nanmean(RTs.map(np.nanmean))
+
+        # Some participants did not complete all conditions 
+        else:   
+            AvgAcc = np.nan
+            AvgDist = np.nan
+            AvgRT = np.nan
+
+        return [AvgAcc, AvgDist, AvgRT]
+
+
     
     # Function to compute distances, based on the accelerometer data. 
     # NOTE: With current information, reliable estimates of distance cannot be obtained. 
@@ -648,7 +872,7 @@ class DataImporter:
     #           RTPeakDistance = Minimum allowed distance between peaks (in milliseconds)
     # Output:   DF = Dataframe with reaction times (returns a copy of input DataFrame but
     #                with a new column for the reaction times)    
-    def ComputeRT(self, DataFrame, RTResLB = 1, RTHeightThresRatio = 0.3, RTPeakDistance = 10):
+    def ComputeRT(self, DataFrame, RTResLB = 0.8, RTHeightThresRatio = 0.3, RTPeakDistance = 10):
         DF = DataFrame.copy(deep = True)
         # If the user decided to display information to the terminal window
         if self.INFO:
@@ -666,13 +890,14 @@ class DataImporter:
             # falsely identified as having too fast reaction times, we will consider any peak larger than RTHeighThresRatio of the highest 
             # peak as a significant peak. However, there are also participants with no reactions, in which case we take the absolute 
             # lowerbound, defined by RTResLB. 
-            RTHeightThres = max(max(abs(row[self.constants['ACCELERATION_COLUMN']]))*RTHeightThresRatio, RTResLB)
+            # RTHeightThres = max(max(abs(row[self.constants['ACCELERATION_COLUMN']]))*RTHeightThresRatio, RTResLB)
+            RTHeightThres = RTResLB
             # The try-except catch below is to account for no reactions (which may not exceed the reaction threshold)
             try:
                 # Find the first index where the acceleration exceeds this threshold
                 RT_idx = np.where(abs(row[self.constants['ACCELERATION_COLUMN']]) >= RTHeightThres)[0][0]
                 # Find the corresponding index in the time array
-                RTs[i] = row[self.constants['TIME_COLUMN']][RT_idx]
+                RTs[i] = row[self.constants['TIME_COLUMN']][RT_idx] - RTPeakDistance
             except IndexError:
                 RTs[i] = 'No Reaction'
         DF[self.constants['RT_COLUMN']] = RTs
@@ -1046,7 +1271,7 @@ class DataImporter:
                     exp_trial_idx = np.where(self._CondTable['is_practice'])[0]
                     # Check for break in indices which contain the 'practice' images 
                     cond_switch = np.where([(exp_trial_idx[i] + 1) != exp_trial_idx[i + 1] for i in range(len(exp_trial_idx)-1)])[0]
-                    idx_switch = exp_trial_idx[cond_switch][0]
+                    idx_switch = exp_trial_idx[cond_switch + 1][0]
                     # Infer new instruction
                     instructions = ['push', 'pull']
                     ori_instruction = self._CondTable['condition'][0][0:4]
@@ -1440,54 +1665,135 @@ class Plotter:
 
     # Function to plot the acceleration, in the x, y, and z directions, as a function of time
     # Units: Acceleration in m/s^2 and Time in ms (milliseconds)
-    def AccelerationTime(self, participant, DF):
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
-        IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
-
-        plt.figure()
-        plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_X_COLUMN']][participant], label = 'X')
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_Y_COLUMN']][participant], label = 'Y')
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['ACCELERATION_COLUMN']][participant], label = 'Z')
+    def AccelerationTime(self, participant, DF, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+        AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
+                   'Y':['ACCELERATION_Y_COLUMN', 1], 
+                   'Z':['ACCELERATION_COLUMN', 2]}
         
-        plt.legend()
-        plt.grid()
-        plt.xlabel('Time [ms]')
-        plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+        # This try-except block is used to determine which type of dataframe is being passed
+        # -> These dataframes have different column names, and correspond to either
+        #    the trial-by-trial accelerations or to the averaged accelerations across trials
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+            IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
+
+            if ParentFig is None:
+                plt.figure()
+                plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
+            else:
+                ParentFig
+
+            for ax in axis:
+                plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants[AxisMap[ax][0]]][participant], label = ax)
+
+            plt.legend()
+            plt.grid()
+            plt.xlabel('Time [ms]')
+            plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+            
+            if ParentFig is None:
+                plt.figure()
+                plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+            else:
+                ParentFig
+
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Acc {} {}'.format(mov, stim)
+
+                    for ax in axis:
+                        t = DF.loc[participant, 'time']
+                        y = DF.loc[participant, col][AxisMap[ax][1]]
+                        reqShape = t.shape
+                        plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
+
+            plt.legend()
+            plt.grid()
+            plt.xlabel('Time [ms]')
+            plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
 
         return None
 
 
     # Function to plot the displacement, in the x, y, and z directions, as a function of time
     # Units: Displacement in cm and Time in ms (milliseconds)
-    def DistanceTime(self, participant, DF, Threshold = 60):
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
-        IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
-
-        # Define data points which represent realistic limits of maximum distance
-        Distance_UpperBound = DF[self.constants['TIME_COLUMN']][participant] * 0 + Threshold
-        Distance_LowerBound = DF[self.constants['TIME_COLUMN']][participant] * 0 - Threshold
-
-        max_dist = np.max([np.max(np.abs(DF[self.constants['DISTANCE_X_COLUMN']][participant]*100)), np.max(np.abs(DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100)), np.max(np.abs(DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100))])
-
-        plt.figure()
-        plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_X_COLUMN']][participant]*100, label = 'X')
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100, label = 'Y')
-        plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100, label = 'Z')
+    def DistanceTime(self, participant, DF, Threshold = 60, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+        AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
+                   'Y':['DISTANCE_Y_COLUMN', 1], 
+                   'Z':['DISTANCE_Z_COLUMN', 2]}
         
-        # Plot threshold limits only if maximum distance is close to these limits
-        if max_dist >= 0.8*Threshold:
-            plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_UpperBound, color = 'k', linestyle = '--', label = 'Maximum Realistic Distance')
-            plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_LowerBound, color = 'k', linestyle = '--')
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+            IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
 
-        plt.legend()
-        plt.grid()
-        plt.xlabel('Time [ms]')
-        plt.ylabel(r'Distance [cm]')
-        
+            # Define data points which represent realistic limits of maximum distance
+            Distance_UpperBound = DF[self.constants['TIME_COLUMN']][participant] * 0 + Threshold
+            Distance_LowerBound = DF[self.constants['TIME_COLUMN']][participant] * 0 - Threshold
+
+            max_dist = np.max([np.max(np.abs(DF[self.constants[AxisMap['X'][0]]][participant]*100)), np.max(np.abs(DF[self.constants[AxisMap['Y'][0]]][participant]*100)), np.max(np.abs(DF[self.constants[AxisMap['Z'][0]]][participant]*100))])
+
+            if ParentFig is None:
+                plt.figure()
+                plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
+            else:
+                ParentFig
+
+            for ax in axis:
+                plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants[AxisMap[ax][0]]][participant]*100, label = ax)
+            
+            # Plot threshold limits only if maximum distance is close to these limits
+            if max_dist >= 0.8*Threshold:
+                plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_UpperBound, color = 'k', linestyle = '--', label = 'Maximum Realistic Distance')
+                plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_LowerBound, color = 'k', linestyle = '--')
+
+            plt.legend()
+            plt.grid()
+            plt.xlabel('Time [ms]')
+            plt.ylabel(r'Distance [cm]')
+
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+
+            Distance_UpperBound = DF.loc[participant, 'time'] * 0 + Threshold
+            Distance_LowerBound = DF.loc[participant, 'time'] * 0 - Threshold
+            
+            if ParentFig is None:
+                plt.figure()
+                plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+            else:
+                ParentFig
+
+            maxDist = 0
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Dist {} {}'.format(mov, stim)
+
+                    maxDist_i = 0
+                    for ax in axis:
+                        t = DF.loc[participant, 'time']
+                        y = DF.loc[participant, col][AxisMap[ax][1]]*100
+                        reqShape = t.shape
+                        plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
+                        maxDist_i = np.max([np.max(np.abs(y)), maxDist_i])
+                    
+                    maxDist = np.max([maxDist_i, maxDist])
+
+            if maxDist >= 0.8*Threshold:
+                plt.plot(DF.loc[participant, 'time'], Distance_UpperBound, color = 'k', linestyle='--', label = 'Maximum Realistic Distance')
+                plt.plot(DF.loc[participant, 'time'], Distance_LowerBound, color = 'k', linestyle='--')
+
+            plt.legend()
+            plt.grid()
+            plt.xlabel('Time [ms]')
+            plt.ylabel(r'Distance [cm]')
+
         return None
 
 
@@ -1503,51 +1809,99 @@ class Plotter:
     # indicate the start and end of the movement. The colors will be matched to the extremes of ColorMap
     #
     # Alternatively, AnimateTrajectory3D can be used to show the propagation of the trajectory in time. 
-    def Trajectory3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r'):
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
-
-        X = DF[self.constants['DISTANCE_X_COLUMN']][participant]*100
-        Y = DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100
-        Z = DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100
-        time = DF[self.constants['TIME_COLUMN']][participant]
-
-        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
-        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
-
-        if Gradient:
-            points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
-            # Map points to line segments of neighboring points (e.g. point i with point i + 1)
-            segments = np.concatenate([points[:-1], points[1:]], axis = 1)
-            # Make collection of line segments
-            lc = Line3DCollection(segments, cmap=ColorMap)
-            # Color segments based on time
-            lc.set_array(time)
-
-        plt.figure()
-        ax = plt.axes(projection = '3d')
-        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+    def Trajectory3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r', movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+        AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
+                   'Y':['DISTANCE_Y_COLUMN', 1], 
+                   'Z':['DISTANCE_Z_COLUMN', 2]}        
         
-        # If we want to represent time as a color gradient on the trajectory
-        if Gradient:
-            cmap = mpl.cm.get_cmap(ColorMap)
-            ax.add_collection3d(lc)
-            # Indicate where the motion began and where it ended, since temporal information is not displayed 
-            ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement (t = {} [ms])'.format(time[0]))
-            ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement (t = {} [ms])'.format(time[-1]))
-        else:
-            ax.plot3D(Z, Y, X, label = 'Trajectory (displacement)')
-            # Indicate where the motion began and where it ended, since temporal information is not displayed 
-            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement (t = {} [ms])'.format(time[0]))
-            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement (t = {} [ms])'.format(time[-1]))
-        
-        ax.legend()
-        ax.set_xlim3d(min_val, max_val)
-        ax.set_ylim3d(min_val, max_val)
-        ax.set_zlim3d(min_val, max_val)
-        ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
-        ax.set_ylabel('Lateral Movement (y-axis) [cm]')
-        ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+            X = DF[self.constants[AxisMap['X'][0]]][participant]*100
+            Y = DF[self.constants[AxisMap['Y'][0]]][participant]*100
+            Z = DF[self.constants[AxisMap['Z'][0]]][participant]*100
+            time = DF[self.constants['TIME_COLUMN']][participant]
+
+            max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+            min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+            if Gradient:
+                points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
+                # Map points to line segments of neighboring points (e.g. point i with point i + 1)
+                segments = np.concatenate([points[:-1], points[1:]], axis = 1)
+                # Make collection of line segments
+                lc = Line3DCollection(segments, cmap=ColorMap)
+                # Color segments based on time
+                lc.set_array(time)
+
+            if ParentFig is None:
+                plt.figure()
+                ax = plt.axes(projection = '3d')
+                plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+            else:
+                ax = ParentFig
+            
+            # If we want to represent time as a color gradient on the trajectory
+            if Gradient:
+                cmap = mpl.cm.get_cmap(ColorMap)
+                ax.add_collection3d(lc)
+                # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement')
+            else:
+                ax.plot3D(Z, Y, X, label = 'Trajectory (displacement)')
+                # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+            
+            ax.legend()
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+
+            if ParentFig is None:
+                plt.figure()
+                ax = plt.axes(projection = '3d')
+                plt.title('Trajectory (displacement) for Participant: {}'.format(DF.loc[participant, 'PID']))
+            else:
+                ax = ParentFig
+
+            max_val = 0
+            min_val = 0
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Dist {} {}'.format(mov, stim)
+                    X = DF.loc[participant, col][AxisMap['X'][1]]*100
+                    Y = DF.loc[participant, col][AxisMap['Y'][1]]*100
+                    Z = DF.loc[participant, col][AxisMap['Z'][1]]*100
+                    time = DF.loc[participant, 'time'].reshape((len(X),))
+
+                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+
+                    ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
+                    # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                    ax.scatter(Z[0], Y[0], X[0], c = 'g')
+                    ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
+            
+            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+                    
+            ax.legend()
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
 
         return None
 
@@ -1563,51 +1917,99 @@ class Plotter:
     # which indicate the start and end of the movement. The colors will be matched to the extremes of ColorMap
     #
     # Alternatively, AnimateAcceleration3D can be used to show the propagation of acceleration in time. 
-    def Acceleration3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r'):
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
-
-        X = DF[self.constants['ACCELERATION_X_COLUMN']][participant]
-        Y = DF[self.constants['ACCELERATION_Y_COLUMN']][participant]
-        Z = DF[self.constants['ACCELERATION_COLUMN']][participant]
-        time = DF[self.constants['TIME_COLUMN']][participant]
-
-        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
-        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
-
-        if Gradient:
-            points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
-            # Map points to line segments of neighboring points (e.g. point i with point i + 1)
-            segments = np.concatenate([points[:-1], points[1:]], axis = 1)
-            # Make collection of line segments
-            lc = Line3DCollection(segments, cmap=ColorMap)
-            # Color segments based on time
-            lc.set_array(time)
-
-        plt.figure()
-        ax = plt.axes(projection = '3d')
-        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+    def Acceleration3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r', movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+        AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
+                   'Y':['ACCELERATION_Y_COLUMN', 1], 
+                   'Z':['ACCELERATION_COLUMN', 2]}        
         
-        # If we want to represent time as a color gradient on the trajectory
-        if Gradient:
-            cmap = mpl.cm.get_cmap(ColorMap)
-            ax.add_collection3d(lc)
-            # Indicate where the motion began and where it ended, since temporal information is not displayed 
-            ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement (t = {} [ms])'.format(time[0]))
-            ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement (t = {} [ms])'.format(time[-1]))
-        else:
-            ax.plot3D(Z, Y, X, label = 'Acceleration')
-            # Indicate where the motion began and where it ended, since temporal information is not displayed 
-            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement (t = {} [ms])'.format(time[0]))
-            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement (t = {} [ms])'.format(time[-1]))
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
 
-        ax.legend()
-        ax.set_xlim3d(min_val, max_val)
-        ax.set_ylim3d(min_val, max_val)
-        ax.set_zlim3d(min_val, max_val)
-        ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
-        ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
-        ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+            X = DF[self.constants[AxisMap['X'][0]]][participant]
+            Y = DF[self.constants[AxisMap['Y'][0]]][participant]
+            Z = DF[self.constants[AxisMap['Z'][0]]][participant]
+            time = DF[self.constants['TIME_COLUMN']][participant]
+
+            max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+            min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+            if Gradient:
+                points = np.array([Z, Y, X]).transpose().reshape(-1, 1, 3)
+                # Map points to line segments of neighboring points (e.g. point i with point i + 1)
+                segments = np.concatenate([points[:-1], points[1:]], axis = 1)
+                # Make collection of line segments
+                lc = Line3DCollection(segments, cmap=ColorMap)
+                # Color segments based on time
+                lc.set_array(time)
+
+            if ParentFig is None:
+                plt.figure()
+                ax = plt.axes(projection = '3d')
+                plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+            else:
+                ax = ParentFig        
+
+            # If we want to represent time as a color gradient on the trajectory
+            if Gradient:
+                cmap = mpl.cm.get_cmap(ColorMap)
+                ax.add_collection3d(lc)
+                # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                ax.scatter(Z[0], Y[0], X[0], c = [cmap(0)], label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = [cmap(time[-1])], label = 'End of movement')
+            else:
+                ax.plot3D(Z, Y, X, label = 'Acceleration')
+                # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+
+            ax.legend()
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+
+            if ParentFig is None:
+                plt.figure()
+                ax = plt.axes(projection = '3d')
+                plt.title('3-D Acceleration for Participant: {}'.format(DF.loc[participant, 'PID']))
+            else:
+                ax = ParentFig
+
+            max_val = 0
+            min_val = 0
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Acc {} {}'.format(mov, stim)
+                    X = DF.loc[participant, col][AxisMap['X'][1]]
+                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                    time = DF.loc[participant, 'time'].reshape((len(X),))
+
+                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+
+                    ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
+                    # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                    ax.scatter(Z[0], Y[0], X[0], c = 'g')
+                    ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
+            
+            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+
+            ax.legend()
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
 
         return None
 
@@ -1624,51 +2026,111 @@ class Plotter:
     #               the elevation and azimuth. Here, View = [elevation, azimuth]
     #           Save = Boolean which dictates whether the animation should be saved or not
     # Output:   An animation of the trajectory, as a function of time. 
-    def AnimateTrajectory3D(self, participant, DF, UseBlit=False, View=[20, -60], Save=False):
-        # Function to update data being shown in the plot
+    def AnimateTrajectory3D(self, participant, DF, UseBlit=True, View=[20, -60], Save=False, movement = ['Pull', 'Push'], stimulus = None):
+        # Function to update data being shown in the plot (single line)
         def update(num, data, line):
             line.set_data(data[:2, :num])
             line.set_3d_properties(data[2, :num])
             return line, 
-
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
-
-        X = DF[self.constants['DISTANCE_X_COLUMN']][participant]*100
-        Y = DF[self.constants['DISTANCE_Y_COLUMN']][participant]*100
-        Z = DF[self.constants['DISTANCE_Z_COLUMN']][participant]*100
-        time = DF[self.constants['TIME_COLUMN']][participant]
-
-        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
-        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
-
-        MovFig = plt.figure()
-        ax = mplot3d.axes3d.Axes3D(MovFig)
-
-        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
-
-        data3Dim = np.array([Z, Y, X])
-        lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label='Trajectory')
-
-        ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
-        ax.set_ylabel('Lateral Movement (y-axis) [cm]')
-        ax.set_zlabel('Vertical Movement (x-axis) [cm]')
-        ax.set_xlim3d(min_val, max_val)
-        ax.set_ylim3d(min_val, max_val)
-        ax.set_zlim3d(min_val, max_val)
-
-        # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
-        ax.view_init(elev=View[0], azim=View[1])
         
-        ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+        # Function to update data being shown in the plot (several lines)
+        def updateMulti(num, data, line):
+            for l, d in zip(line, data):
+                l.set_data(d[:2, :num])
+                l.set_3d_properties(d[2, :num])
+            return line
 
-        line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
-        plt.show()
+        AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
+            'Y':['DISTANCE_Y_COLUMN', 1], 
+            'Z':['DISTANCE_Z_COLUMN', 2]}   
 
-        if Save:
-            line_animation.save('Trajectory_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+            X = DF[self.constants[AxisMap['X'][0]]][participant]*100
+            Y = DF[self.constants[AxisMap['Y'][0]]][participant]*100
+            Z = DF[self.constants[AxisMap['Z'][0]]][participant]*100
+            time = DF[self.constants['TIME_COLUMN']][participant]
+
+            max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+            min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+
+            MovFig = plt.figure()
+            ax = mplot3d.axes3d.Axes3D(MovFig)
+
+            plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+
+            data3Dim = np.array([Z, Y, X])
+            lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label='Trajectory')
+
+            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+
+            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+            ax.view_init(elev=View[0], azim=View[1])
+            
+            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+            line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
+            plt.show()
+
+            if Save:
+                line_animation.save('Trajectory_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+        
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+
+            dataLines = []
+            labels = []
+
+            max_val = 0
+            min_val = 0
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Acc {} {}'.format(mov, stim)
+                    X = DF.loc[participant, col][AxisMap['X'][1]]
+                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                    time = DF.loc[participant, 'time'].reshape((len(X),))
+
+                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+
+                    dataLines.append([Z, Y, X])
+                    labels.append('{} {}'.format(mov, stim))
+
+            MovFig = plt.figure()
+            ax = mplot3d.axes3d.Axes3D(MovFig)
+
+            dataLines = np.array(dataLines)
+            lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
+
+            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+
+            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+            ax.view_init(elev=View[0], azim=View[1])
+            
+            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+            line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
+            plt.show()
+
+            if Save:
+                line_animation.save('Trajectory_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
 
         return None
+
 
     # Function to show the 3D propagation of acceleration in time of the AAT movement.
     # Inputs:   Participant = Index in the dataframe, DF, that we would like to plot
@@ -1682,49 +2144,254 @@ class Plotter:
     #               the elevation and azimuth. Here, View = [elevation, azimuth]
     #           Save = Boolean which dictates whether the animation should be saved or not
     # Output:   An animation of the 3D acceleration, as a function of time. 
-    def AnimateAcceleration3D(self, participant, DF, UseBlit=False, View=[20, -60], Save=False):
+    def AnimateAcceleration3D(self, participant, DF, UseBlit=True, View=[20, -60], Save=False, movement = ['Pull', 'Push'], stimulus = None):
         # Function to update data being shown in the plot
         def update(num, data, line):
             line.set_data(data[:2, :num])
             line.set_3d_properties(data[2, :num])
             return line, 
 
-        Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
-        Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+        # Function to update data being shown in the plot (several lines)
+        def updateMulti(num, data, line):
+            for l, d in zip(line, data):
+                l.set_data(d[:2, :num])
+                l.set_3d_properties(d[2, :num])
+            return line
 
-        X = DF[self.constants['ACCELERATION_X_COLUMN']][participant]
-        Y = DF[self.constants['ACCELERATION_Y_COLUMN']][participant]
-        Z = DF[self.constants['ACCELERATION_COLUMN']][participant]
-        time = DF[self.constants['TIME_COLUMN']][participant]
+        AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
+                   'Y':['ACCELERATION_Y_COLUMN', 1], 
+                   'Z':['ACCELERATION_COLUMN', 2]}        
+
+        try:
+            Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+            Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+
+            X = DF[self.constants[AxisMap['X'][0]]][participant]
+            Y = DF[self.constants[AxisMap['Y'][0]]][participant]
+            Z = DF[self.constants[AxisMap['Z'][0]]][participant]
+            time = DF[self.constants['TIME_COLUMN']][participant]
 
 
-        max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
-        min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
+            max_val = np.max([np.max(X), np.max(Y), np.max(Z)])
+            min_val = np.min([np.min(X), np.min(Y), np.min(Z)])
 
-        MovFig = plt.figure()
-        ax = mplot3d.axes3d.Axes3D(MovFig)
+            MovFig = plt.figure()
+            ax = mplot3d.axes3d.Axes3D(MovFig)
 
-        plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
+            plt.title('Stimulus: {}, Correct Response: {}'.format(Stimulus, Correct_Response))
 
-        data3Dim = np.array([Z, Y, X])
-        lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label = 'Acceleration')
+            data3Dim = np.array([Z, Y, X])
+            lines, = ax.plot(data3Dim[0, 0:1], data3Dim[1, 0:1], data3Dim[2, 0:1], label = 'Acceleration')
 
-        ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
-        ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
-        ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
-        ax.set_xlim3d(min_val, max_val)
-        ax.set_ylim3d(min_val, max_val)
-        ax.set_zlim3d(min_val, max_val)
+            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
 
-        # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
-        ax.view_init(elev=View[0], azim=View[1])
-        
-        ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+            ax.view_init(elev=View[0], azim=View[1])
+            
+            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
 
-        line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
-        plt.show()
+            line_animation = animation.FuncAnimation(MovFig, update, len(time), fargs=(data3Dim, lines), interval=1, blit=UseBlit)
+            plt.show()
 
-        if Save:
-            line_animation.save('3DAcceleration_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+            if Save:
+                line_animation.save('3DAcceleration_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
+
+        except KeyError:
+            if not stimulus: 
+                stimulus = [DF.columns[-1].split(' ')[-1]]
+
+            dataLines = []
+            labels = []
+
+            max_val = 0
+            min_val = 0
+            for mov in movement:
+                for stim in stimulus:
+                    col = 'Acc {} {}'.format(mov, stim)
+                    X = DF.loc[participant, col][AxisMap['X'][1]]
+                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                    time = DF.loc[participant, 'time'].reshape((len(X),))
+
+                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+
+                    dataLines.append([Z, Y, X])
+                    labels.append('{} {}'.format(mov, stim))
+
+            MovFig = plt.figure()
+            ax = mplot3d.axes3d.Axes3D(MovFig)
+
+            dataLines = np.array(dataLines)
+            lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
+
+            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+            ax.set_xlim3d(min_val, max_val)
+            ax.set_ylim3d(min_val, max_val)
+            ax.set_zlim3d(min_val, max_val)
+
+            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+            ax.view_init(elev=View[0], azim=View[1])
+            
+            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+            line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
+            plt.show()
+
+            if Save:
+                line_animation.save('3DAcceleration_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
+
+        return None
+
+
+    def ApproachAvoidanceXZ(self, metric, participant, DF, movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+        if metric.lower() == 'acceleration':
+            AxisMap = {'X':['ACCELERATION_X_COLUMN', 0],
+                    'Z':['ACCELERATION_COLUMN', 2]}
+            Lab = r'Acceleration $\frac{m}{s^2}$'
+            Factor = 1
+            met = 'Acc'
+            showRegion = False
+        elif metric.lower() == 'distance':
+            AxisMap = {'X':['DISTANCE_X_COLUMN', 0],
+                   'Z':['DISTANCE_Z_COLUMN', 2]} 
+            Lab = 'Distance [cm]'
+            Factor = 100
+            met = 'Dist'
+            showRegion = True
+        else:
+            print('[ERROR] <metric> not understood in <ApproachAvoidanceXZ>. User inputted <{}>, Please use <acceleration> or <distance>.'.format(metric))
+            AxisMap = None
+
+        if AxisMap is not None:
+            try:
+                Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
+                Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
+                IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
+
+                if ParentFig is None:
+                    plt.figure()
+                    plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
+                else:
+                    ParentFig
+
+                plt.plot(DF[self.constants[AxisMap['Z'][0]]][participant]*Factor, DF[self.constants[AxisMap['X'][0]]][participant]*Factor, label = 'X-Z Movement')
+
+                plt.legend()
+                plt.grid()
+                plt.xlabel(r'Z (Ventral Axis) {}'.format(Lab))
+                plt.ylabel(r'X (Vertical Axis) {}'.format(Lab))
+
+            except KeyError:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
+                
+                if ParentFig is None:
+                    plt.figure()
+                    plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+                else:
+                    ParentFig
+
+                ax = plt.gca()
+
+                if showRegion:
+                    theta = np.linspace(0, 2*np.pi, 100)
+                    r = 20
+                    x1 = r * np.cos(theta) + r
+                    x2 = r * np.sin(theta)
+
+                    avoidColor = (0.8, 0.0, 0.0, 0.2)
+                    approachColor = (0.0, 1.0, 0., 0.4)
+
+                    ax.set_facecolor(avoidColor)
+                    plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
+                    plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
+
+                minx = 0
+                maxx = 0
+                minz = 0
+                maxz = 0
+
+                startColor = 'purple'
+                endColor = 'yellow'
+
+                for mov in movement:
+                    for stim in stimulus:
+                        col = '{} {} {}'.format(met, mov, stim)
+                        x = DF.loc[participant, col][AxisMap['X'][1]] * Factor
+                        z = DF.loc[participant, col][AxisMap['Z'][1]] * Factor
+                        plt.plot(z, x, label = '({} {})'.format(mov, stim))
+                        plt.scatter(z[0], x[0], color = startColor)
+                        plt.scatter(z[-1], x[-1], color = endColor)
+                        minx = np.min([minx, np.min(x)])
+                        maxx = np.max([maxx, np.max(x)])
+                        minz = np.min([minz, np.min(z)])
+                        maxz = np.max([maxz, np.max(z)])
+
+                plt.scatter(z[0], x[0], color = startColor, label = 'Start of movement')
+                plt.scatter(z[-1], x[-1], color = endColor, label = 'End of movement')
+                
+                handles, labels = ax.get_legend_handles_labels()
+                if showRegion:
+                    approachPatch = mpl.patches.Patch(color = approachColor, label = '(Approximate) Approach region')
+                    avoidancePatch = mpl.patches.Patch(color = avoidColor, label = '(Approximate) Avoid region')
+                    handles.append(approachPatch)
+                    handles.append(avoidancePatch)
+
+                plt.legend(handles = handles)
+                plt.grid()
+                plt.xlabel(r'Z (Ventral Axis) {}'.format(Lab))
+                plt.ylabel(r'X (Vertical Axis) {}'.format(Lab))
+                plt.xlim([1.1*minz, 1.1*maxz])
+                plt.ylim([1.1*minx, 1.1*maxx])
+
+        return None
+
+
+    def MultiPlot(self, Layout, Functions, FuncArgs):
+
+        # Utility function to get the value of an input argument
+        # For optional arguments, in case a value is not given
+        # by the user, the function will attempt to find the 
+        # default value and return that. 
+        def getParam(InputtedParams, key, f=None):
+            try:
+                param = InputtedParams[key]
+            except KeyError:
+                # For the case that we want to keep the default kwarg
+                if f is not None:
+                    num_input_args = f.__code__.co_argcount
+                    # Start at 1 since input argument at index 0 is self
+                    f_all_inputs = f.__code__.co_varnames[1:num_input_args]
+                    f_defaults = f.__defaults__
+                    f_args = f_all_inputs[-len(f_defaults):]
+                    input_params = {k:f_defaults[v] for v,k in enumerate(f_args)}
+                    param = getParam(input_params, key)
+                else:
+                    param = None
+            return param
+
+        fig = plt.figure()
+
+        for idx, func in enumerate(Functions):
+            # Need to create special subplot for 3D graphs. All 3D functions have '3D' at the end
+            # so we use this to identify them 
+            if func.__name__.endswith('3D'):
+                subFig = fig.add_subplot(Layout[0], Layout[1], idx + 1, projection = '3d')
+            else:
+                subFig = plt.subplot(Layout[0], Layout[1], idx + 1)
+            Params = FuncArgs[idx]
+            func(participant = getParam(Params, 'participant'), DF = getParam(Params, 'DF'), ParentFig = subFig,
+                metric = getParam(Params, 'metric', func), axis = getParam(Params, 'axis', func), 
+                movement = getParam(Params, 'movement', func), stimulus = getParam(Params, 'stimulus', func),
+                Gradient = getParam(Params, 'Gradient', func), ColorMap = getParam(Params, 'ColorMap', func), 
+                Threshold = getParam(Params, 'Threshold', func))
 
         return None
