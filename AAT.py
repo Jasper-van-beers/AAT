@@ -17,6 +17,8 @@ from matplotlib import pyplot as plt
 from matplotlib import animation as animation
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 import matplotlib as mpl
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
 
 # Class to handle importing, filtering, and pre-processing of data from the AAT
 class DataImporter:
@@ -73,7 +75,9 @@ class DataImporter:
                         'DISTANCE_X_COLUMN' : 'distance_x',
                         'DISTANCE_Y_COLUMN' : 'distance_y',
                         'DISTANCE_Z_COLUMN' : 'distance_z',
-                        'TOTAL_DISTANCE_COLUMN' : 'total_distance'}
+                        'TOTAL_DISTANCE_COLUMN' : 'total_distance',
+                        'DELTA_A_COLUMN': 'da',
+                        'DELTA_D_COLUMN': 'dd'}
         standard_cols = ['PARTICIPANT_COLUMN', 'DEVICE_COLUMN', 
                         'EXPERIMENT_COLUMN', 'CONDITION_COLUMN', 
                         'SIGNED_UP_COLUMN', 'SESSION_COLUMN']
@@ -165,232 +169,58 @@ class DataImporter:
         # Add something to rename acceleration column to acceleration_z
         pass
 
-
-
-    def AverageBetweenParticipant(self, DFWithinParticipant, Control, Target):
-        DF = DFWithinParticipant.copy(deep = True)
-
-        if self.INFO:
-            print('[INFO] Averaging results between participants')
-
-        try:
-            _dummy = DF['Acc Pull {}'.format(Control)]
-            _dummy = DF['Acc Pull {}'.format(Target)]
-        except KeyError:
-            print('[WARNING] in function <AverageBetweenParticipant> - Inputted DataFrame has not yet been averaged within participants')
-            print('\t Attempting to average within participants, calling <AverageWithinParticipant>...')
-            DF = self.AverageWithinParticipant(DFWithinParticipant, Control, Target)
-        
-        DF = DF.set_index(['PID'])
-        
-        if self.INFO:
-            iterations = tqdm(DF.index)
-        else:
-            iterations = DF.index
-
-        N = len(DF)
-        times = DF['time']
-
-        maxT = np.max(times.map(np.max))
-        minT = np.min(times.map(np.min))
-
-        dt = 1
-        unifiedTime = np.arange(minT, maxT + dt, dt)
-        unifiedTime = unifiedTime.reshape((1, len(unifiedTime)))
-        dataHost = unifiedTime.copy() * 0
-
-        # Create empty dictionary to store data
-        data = {}
-        for col in DF.columns:
-            data.update({col:[]})
-        
-        FactorMap = {}
-        MissingData = np.sum(DF.isnull())
-        for idx, col in enumerate(DF.columns):
-            FactorMap.update({col:(1/(N - MissingData[idx]))})
-        
-
-        for pIdx, pid in enumerate(iterations):
-            pData = DF.loc[pid, :]
-            pTime = pData['time']
-            try:
-                pStartIdx = np.where(unifiedTime[0] >= pTime[0])[0][0]
-                pEndIdx = np.where(unifiedTime[0] >= pTime[-1])[0][0] + 1
-            # If this error arises, it means that there is no time data (participant only
-            # completed practice trials)
-            # TODO: Flag for removal
-            except TypeError:
-                pass
-
-
-            for cIdx, col in enumerate(pData.index):
-                try:
-                    # We are dealing with values (e.g. RT)
-                    if len(pData[col].shape) == 0:
-                        surrogateData = pData[col] * FactorMap[col]
-                        ax = None
-
-                    # # Then we are dealing with a 1-d array (time)
-                    elif col == 'time':
-                        surrogateData = unifiedTime.copy() * FactorMap[col]
-                        ax = 1
-                    # Otherwise, we need to loop through entries of n-d array
-                    else:
-                        n = len(pData[col])
-                        # Create n copies of surrogateData to be filled in
-                        tup = []
-                        for row in range(pData[col].shape[0]):
-                            tup.append(dataHost.copy())
-                        surrogateData = np.vstack(tuple(tup))
-                        surrogateData[:, pStartIdx:pEndIdx] = pData[col] * FactorMap[col]
-                        ax = 1
-                # When value error is raised, there is no data for that column, so leave data empty
-                except AttributeError:
-                    surrogateData = data[col]
-                    # import code
-                    # code.interact(local=locals())
-                
-                if pIdx != 0:
-                    oldData = data[col]
-                    newData = oldData.copy()
-                    if ax:
-                        for row in range(surrogateData.shape[0]):
-                            newData[row] = np.nansum(np.vstack((oldData[row], surrogateData[row])), axis = (ax-1))
-                    else:
-                        if not np.isnan(pData[col]):
-                            newData = np.nansum(np.vstack((oldData, surrogateData)))
-                else: 
-                    newData = surrogateData
-
-                data.update({col : newData})
-
-        
-        data.update({'PID' : 'Average'})
-        AvgDF = pd.DataFrame(data=[data.values()], columns=data.keys())
-
-        return AvgDF
-
-
-
-    def AverageWithinParticipant(self, DataFrame, Control, Target):
-        DF = DataFrame.copy(deep = True)
-        DFByPID = DF.set_index([self.constants['PARTICIPANT_COLUMN']])
-        UniquePIDs = np.unique(DF[self.constants['PARTICIPANT_COLUMN']])
-
-        if self.INFO:
-            print('[INFO] Averaging results within participants...')
-            iterations = tqdm(UniquePIDs)
-        else:
-            iterations = UniquePIDs
-
-        NumParticipants = len(UniquePIDs)
-        metrics = {'Acc' : [np.array(np.nan)]*NumParticipants, 
-                   'Dist' : [np.array(np.nan)]*NumParticipants, 
-                   'RT' : np.nan}
-        movements = ['Push', 'Pull']
-
-        Cols = {'PID' : ' ',
-                'time' : [np.array(np.nan)]*NumParticipants}
-        for mov in movements:
-            for m in metrics.keys():
-                Cols.update({'{} {} {}'.format(m, mov, Control) : metrics[m]})
-                Cols.update({'{} {} {}'.format(m, mov, Target) : metrics[m]})
-
-        Data = []
-
-        for idx, pid in enumerate(iterations):
-            ParticipantData = DFByPID.loc[pid, :]
-            N = len(ParticipantData)
-            PracticeIdx = np.where(DFByPID.loc[pid, 'is_practice'])[0]
-            AllIdx = np.arange(0, N, 1)
-            AllIdx = np.delete(AllIdx, PracticeIdx)
-            ParticipantData = ParticipantData.iloc[AllIdx, :]
-            times = ParticipantData[self.constants['TIME_COLUMN']]
-            maxT = np.max(times.map(max))
-            minT = np.min(times.map(min))
-
-            # Some participants didn't even get past the practice trials
-            if len(AllIdx) > 0:
-                dt = 1
-                UnifiedTime = np.arange(minT, maxT + dt, dt)
-                
-                Data.append(Cols.copy())
-                Data[idx]['PID'] = pid
-                Data[idx]['time'] = UnifiedTime
-
-                for mov in movements:
-                    C_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Control)
-                    T_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Target)
-                    for i, m in enumerate(metrics):
-                        Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[i]
-                        Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[i]
-            else:
-                Data.append(Cols.copy())
-                for col in Cols.keys():
-                    Data[-1][col] = np.nan
-                Data[-1]['PID'] = pid
-        
-        OutDF = pd.DataFrame(Data)
-
-        return OutDF
-
-
-
-    def _AverageOverCondition(self, participantData, unifiedTime, movement, stimulus):
-        movementIdx = np.where(participantData[self.constants['CORRECT_RESPONSE_COLUMN']] == movement)[0]
-        stimulusIdx = np.where(participantData[self.constants['STIMULUS_SET_COLUMN']] == stimulus)[0]
-        conditionIdx = np.intersect1d(movementIdx, stimulusIdx)
-
-        condData = participantData.iloc[conditionIdx, :]
-        N = len(condData)
-
-        if N > 0:
-            times = condData[self.constants['TIME_COLUMN']]
-            # # Get minimum and maximum of time series
-            # maxT = np.max(times.map(max))
-            # minT = np.min(times.map(min))
-
-            # dt = 1
-            # unifiedTime = np.arange(minT, maxT + dt, dt)
-
-            # Acc = np.zeros((3, N, len(unifiedTime))) * np.nan
-            # Dist = np.zeros((3, N, len(unifiedTime))) * np.nan
-
-            Acc = np.zeros((3, N, len(unifiedTime)))
-            Dist = np.zeros((3, N, len(unifiedTime)))
-
-            for i in range(N):
-                startIdx = np.where(unifiedTime >= times[i][0])[0][0]
-                endIdx = np.where(unifiedTime >= times[i][-1])[0][0] + 1
-
-                iData = condData.iloc[i, :]
-
-                Acc[0, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_X_COLUMN']]
-                Acc[1, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_Y_COLUMN']]
-                Acc[2, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_COLUMN']]
-
-                Dist[0, i, startIdx:endIdx] = iData[self.constants['DISTANCE_X_COLUMN']]
-                Dist[1, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Y_COLUMN']]
-                Dist[2, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Z_COLUMN']]
-
-            # Runtime warnings may appear due to this averaging, since there could instances where
-            # we are averaging arrays of just nans. 
-            AvgAcc = np.nanmean(Acc, axis = 1)
-            AvgDist = np.nanmean(Dist, axis = 1)
-
-            RTs = condData[self.constants['RT_COLUMN']]
-            AvgRT = np.nanmean(RTs.map(np.nanmean))
-
-        # Some participants did not complete all conditions 
-        else:   
-            AvgAcc = np.nan
-            AvgDist = np.nan
-            AvgRT = np.nan
-
-        return [AvgAcc, AvgDist, AvgRT]
-
-
     
+    # Function to compute the peak accelerations and distances following a reaction
+    # Input:    processedData = DataFrame containing the processed AAT data (i.e.
+    #                           with the computed distances)
+    #           axes = Axes for which the peak acceleration and distance will be 
+    #                  computed. If multiple axes are provided, then the function
+    #                  will compute the magnitude of the peaks in the provided 
+    #                  axes. The default is the Z (approach/avoidance) axis. 
+    #           absolute = Boolean indicating if the absolute value of the 
+    #                      peak accelerations and distances should be taken
+    #                      Default = False
+    # Output:   DF: Updated version of the input 'processedData' containing
+    #               the peak accelerations and distances
+    def ComputeDeltaAandD(self, processedData, axes = ['Z'], absolute=False):
+
+        def _Delta(row, axes, Map, pos = 1):
+            t = row[self.constants['TIME_COLUMN']]
+            rt = row[self.constants['RT_COLUMN']]
+            x = np.zeros((len(axes), len(t)))
+
+            for i, ax in enumerate(axes):
+                x[i, :] = row[self.constants[Map[ax][pos]]]
+
+            if i > 0:
+                x = np.sqrt(np.nansum(np.square(x), axis = 0))
+
+            x = x.reshape((len(row[self.constants['TIME_COLUMN']]), ))
+
+            try:
+                idxs = spsig.find_peaks(abs(x))[0]
+                idx = np.where(t[idxs] >= rt)[0][0]
+                dx = x[idxs[idx]]
+                if absolute:
+                    dx = abs(dx)
+            except IndexError:
+                dx = np.nan
+
+            return dx
+
+        DF = processedData.copy(deep = True)
+
+        AxisMap = {'X':['DISTANCE_X_COLUMN', 'ACCELERATION_X_COLUMN'], 
+            'Y':['DISTANCE_Y_COLUMN', 'ACCELERATION_Y_COLUMN'], 
+            'Z':['DISTANCE_Z_COLUMN', 'ACCELERATION_COLUMN']}
+
+        DF[self.constants['DELTA_A_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 1), axis = 1)
+        DF[self.constants['DELTA_D_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 0), axis = 1)
+
+        return DF
+
+
+
     # Function to compute distances, based on the accelerometer data. 
     # NOTE: With current information, reliable estimates of distance cannot be obtained. 
     # Obtaining distance is not so trivial -> Due to double integration, noise and bias 
@@ -1649,12 +1479,16 @@ class DataImporter:
 
 
 
-
 # Class to facilitate plotting of the AAT data
 class Plotter:
 
-    def __init__(self, constants):
-        self.constants = constants
+    def __init__(self, constants = None):
+        # If no constants are given, take them from the DataImporter Class
+        if constants is None:
+            Importer = DataImporter('DummyPath', 'DummyPath')
+            self.constants = Importer.constants
+        else:
+            self.constants = constants
 
 
     # Function to display plots
@@ -1669,11 +1503,18 @@ class Plotter:
         AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
                    'Y':['ACCELERATION_Y_COLUMN', 1], 
                    'Z':['ACCELERATION_COLUMN', 2]}
-        
-        # This try-except block is used to determine which type of dataframe is being passed
-        # -> These dataframes have different column names, and correspond to either
-        #    the trial-by-trial accelerations or to the averaged accelerations across trials
-        try:
+
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['ACCELERATION_X_COLUMN'], self.constants['ACCELERATION_Y_COLUMN'], 
+                            self.constants['ACCELERATION_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['IS_PRACTICE_COLUMN'], 
+                            self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
             IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
@@ -1691,31 +1532,36 @@ class Plotter:
             plt.grid()
             plt.xlabel('Time [ms]')
             plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+        elif all (key in DF.columns for key in AveragedCols):
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
+                
+                if ParentFig is None:
+                    plt.figure()
+                    plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+                else:
+                    ParentFig
 
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
-            
-            if ParentFig is None:
-                plt.figure()
-                plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
-            else:
-                ParentFig
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Acc {} {}'.format(mov, stim)
 
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Acc {} {}'.format(mov, stim)
+                        for ax in axis:
+                            t = DF.loc[participant, 'time']
+                            y = DF.loc[participant, col][AxisMap[ax][1]]
+                            reqShape = t.shape
+                            plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
 
-                    for ax in axis:
-                        t = DF.loc[participant, 'time']
-                        y = DF.loc[participant, col][AxisMap[ax][1]]
-                        reqShape = t.shape
-                        plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
-
-            plt.legend()
-            plt.grid()
-            plt.xlabel('Time [ms]')
-            plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+                plt.legend()
+                plt.grid()
+                plt.xlabel('Time [ms]')
+                plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
         return None
 
@@ -1726,8 +1572,18 @@ class Plotter:
         AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
                    'Y':['DISTANCE_Y_COLUMN', 1], 
                    'Z':['DISTANCE_Z_COLUMN', 2]}
-        
-        try:
+
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], 
+                            self.constants['DISTANCE_Z_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['IS_PRACTICE_COLUMN'], 
+                            self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):        
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
             IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
@@ -1757,42 +1613,49 @@ class Plotter:
             plt.xlabel('Time [ms]')
             plt.ylabel(r'Distance [cm]')
 
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
+        elif all (key in DF.columns for key in AveragedCols):
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
 
-            Distance_UpperBound = DF.loc[participant, 'time'] * 0 + Threshold
-            Distance_LowerBound = DF.loc[participant, 'time'] * 0 - Threshold
-            
-            if ParentFig is None:
-                plt.figure()
-                plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
-            else:
-                ParentFig
+                Distance_UpperBound = DF.loc[participant, 'time'] * 0 + Threshold
+                Distance_LowerBound = DF.loc[participant, 'time'] * 0 - Threshold
+                
+                if ParentFig is None:
+                    plt.figure()
+                    plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+                else:
+                    ParentFig
 
-            maxDist = 0
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Dist {} {}'.format(mov, stim)
+                maxDist = 0
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Dist {} {}'.format(mov, stim)
 
-                    maxDist_i = 0
-                    for ax in axis:
-                        t = DF.loc[participant, 'time']
-                        y = DF.loc[participant, col][AxisMap[ax][1]]*100
-                        reqShape = t.shape
-                        plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
-                        maxDist_i = np.max([np.max(np.abs(y)), maxDist_i])
-                    
-                    maxDist = np.max([maxDist_i, maxDist])
+                        maxDist_i = 0
+                        for ax in axis:
+                            t = DF.loc[participant, 'time']
+                            y = DF.loc[participant, col][AxisMap[ax][1]]*100
+                            reqShape = t.shape
+                            plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
+                            maxDist_i = np.max([np.max(np.abs(y)), maxDist_i])
+                        
+                        maxDist = np.max([maxDist_i, maxDist])
 
-            if maxDist >= 0.8*Threshold:
-                plt.plot(DF.loc[participant, 'time'], Distance_UpperBound, color = 'k', linestyle='--', label = 'Maximum Realistic Distance')
-                plt.plot(DF.loc[participant, 'time'], Distance_LowerBound, color = 'k', linestyle='--')
+                if maxDist >= 0.8*Threshold:
+                    plt.plot(DF.loc[participant, 'time'], Distance_UpperBound, color = 'k', linestyle='--', label = 'Maximum Realistic Distance')
+                    plt.plot(DF.loc[participant, 'time'], Distance_LowerBound, color = 'k', linestyle='--')
 
-            plt.legend()
-            plt.grid()
-            plt.xlabel('Time [ms]')
-            plt.ylabel(r'Distance [cm]')
+                plt.legend()
+                plt.grid()
+                plt.xlabel('Time [ms]')
+                plt.ylabel(r'Distance [cm]')
+
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
         return None
 
@@ -1814,7 +1677,16 @@ class Plotter:
                    'Y':['DISTANCE_Y_COLUMN', 1], 
                    'Z':['DISTANCE_Z_COLUMN', 2]}        
         
-        try:
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], 
+                            self.constants['DISTANCE_Z_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):      
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
 
@@ -1863,45 +1735,53 @@ class Plotter:
             ax.set_ylabel('Lateral Movement (y-axis) [cm]')
             ax.set_zlabel('Vertical Movement (x-axis) [cm]')
 
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
-
-            if ParentFig is None:
-                plt.figure()
-                ax = plt.axes(projection = '3d')
-                plt.title('Trajectory (displacement) for Participant: {}'.format(DF.loc[participant, 'PID']))
-            else:
-                ax = ParentFig
-
-            max_val = 0
-            min_val = 0
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Dist {} {}'.format(mov, stim)
-                    X = DF.loc[participant, col][AxisMap['X'][1]]*100
-                    Y = DF.loc[participant, col][AxisMap['Y'][1]]*100
-                    Z = DF.loc[participant, col][AxisMap['Z'][1]]*100
-                    time = DF.loc[participant, 'time'].reshape((len(X),))
-
-                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
-                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
-
-                    ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
-                    # Indicate where the motion began and where it ended, since temporal information is not displayed 
-                    ax.scatter(Z[0], Y[0], X[0], c = 'g')
-                    ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
+        elif all (key in DF.columns for key in AveragedCols):
             
-            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
-            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
-                    
-            ax.legend()
-            ax.set_xlim3d(min_val, max_val)
-            ax.set_ylim3d(min_val, max_val)
-            ax.set_zlim3d(min_val, max_val)
-            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
-            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
-            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
+
+                if ParentFig is None:
+                    plt.figure()
+                    ax = plt.axes(projection = '3d')
+                    plt.title('Trajectory (displacement) for Participant: {}'.format(DF.loc[participant, 'PID']))
+                else:
+                    ax = ParentFig
+
+                max_val = 0
+                min_val = 0
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Dist {} {}'.format(mov, stim)
+                        X = DF.loc[participant, col][AxisMap['X'][1]]*100
+                        Y = DF.loc[participant, col][AxisMap['Y'][1]]*100
+                        Z = DF.loc[participant, col][AxisMap['Z'][1]]*100
+                        time = DF.loc[participant, 'time'].reshape((len(X),))
+
+                        max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                        min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+
+                        ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
+                        # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                        ax.scatter(Z[0], Y[0], X[0], c = 'g')
+                        ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
+                
+                ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+                        
+                ax.legend()
+                ax.set_xlim3d(min_val, max_val)
+                ax.set_ylim3d(min_val, max_val)
+                ax.set_zlim3d(min_val, max_val)
+                ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+                ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+                ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
         return None
 
@@ -1920,9 +1800,18 @@ class Plotter:
     def Acceleration3D(self, participant, DF, Gradient = False, ColorMap = 'RdYlGn_r', movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
         AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
                    'Y':['ACCELERATION_Y_COLUMN', 1], 
-                   'Z':['ACCELERATION_COLUMN', 2]}        
-        
-        try:
+                   'Z':['ACCELERATION_COLUMN', 2]} 
+
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['ACCELERATION_X_COLUMN'], self.constants['ACCELERATION_Y_COLUMN'], 
+                            self.constants['ACCELERATION_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
 
@@ -1971,45 +1860,54 @@ class Plotter:
             ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
             ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
 
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
+        elif all (key in DF.columns for key in AveragedCols):
+    
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
 
-            if ParentFig is None:
-                plt.figure()
-                ax = plt.axes(projection = '3d')
-                plt.title('3-D Acceleration for Participant: {}'.format(DF.loc[participant, 'PID']))
-            else:
-                ax = ParentFig
+                if ParentFig is None:
+                    plt.figure()
+                    ax = plt.axes(projection = '3d')
+                    plt.title('3-D Acceleration for Participant: {}'.format(DF.loc[participant, 'PID']))
+                else:
+                    ax = ParentFig
 
-            max_val = 0
-            min_val = 0
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Acc {} {}'.format(mov, stim)
-                    X = DF.loc[participant, col][AxisMap['X'][1]]
-                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
-                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
-                    time = DF.loc[participant, 'time'].reshape((len(X),))
+                max_val = 0
+                min_val = 0
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Acc {} {}'.format(mov, stim)
+                        X = DF.loc[participant, col][AxisMap['X'][1]]
+                        Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                        Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                        time = DF.loc[participant, 'time'].reshape((len(X),))
 
-                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
-                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+                        max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                        min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
 
-                    ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
-                    # Indicate where the motion began and where it ended, since temporal information is not displayed 
-                    ax.scatter(Z[0], Y[0], X[0], c = 'g')
-                    ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
-            
-            ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
-            ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
+                        ax.plot3D(Z, Y, X, label = '{} {}'.format(mov, stim))
+                        # Indicate where the motion began and where it ended, since temporal information is not displayed 
+                        ax.scatter(Z[0], Y[0], X[0], c = 'g')
+                        ax.scatter(Z[-1], Y[-1], X[-1], c = 'r')
+                
+                ax.scatter(Z[0], Y[0], X[0], c = 'g', label = 'Start of movement')
+                ax.scatter(Z[-1], Y[-1], X[-1], c = 'r', label = 'End of movement')
 
-            ax.legend()
-            ax.set_xlim3d(min_val, max_val)
-            ax.set_ylim3d(min_val, max_val)
-            ax.set_zlim3d(min_val, max_val)
-            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
-            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
-            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+                ax.legend()
+                ax.set_xlim3d(min_val, max_val)
+                ax.set_ylim3d(min_val, max_val)
+                ax.set_zlim3d(min_val, max_val)
+                ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+                ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+                ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
+        
 
         return None
 
@@ -2044,7 +1942,16 @@ class Plotter:
             'Y':['DISTANCE_Y_COLUMN', 1], 
             'Z':['DISTANCE_Z_COLUMN', 2]}   
 
-        try:
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], 
+                            self.constants['DISTANCE_Z_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):    
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
 
@@ -2082,53 +1989,61 @@ class Plotter:
             if Save:
                 line_animation.save('Trajectory_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
         
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
+        elif all (key in DF.columns for key in AveragedCols):
 
-            dataLines = []
-            labels = []
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
 
-            max_val = 0
-            min_val = 0
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Acc {} {}'.format(mov, stim)
-                    X = DF.loc[participant, col][AxisMap['X'][1]]
-                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
-                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
-                    time = DF.loc[participant, 'time'].reshape((len(X),))
+                dataLines = []
+                labels = []
 
-                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
-                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+                max_val = 0
+                min_val = 0
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Dist {} {}'.format(mov, stim)
+                        X = DF.loc[participant, col][AxisMap['X'][1]]
+                        Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                        Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                        time = DF.loc[participant, 'time'].reshape((len(X),))
 
-                    dataLines.append([Z, Y, X])
-                    labels.append('{} {}'.format(mov, stim))
+                        max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                        min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
 
-            MovFig = plt.figure()
-            ax = mplot3d.axes3d.Axes3D(MovFig)
+                        dataLines.append([Z, Y, X])
+                        labels.append('{} {}'.format(mov, stim))
 
-            dataLines = np.array(dataLines)
-            lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
+                MovFig = plt.figure()
+                ax = mplot3d.axes3d.Axes3D(MovFig)
 
-            ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
-            ax.set_ylabel('Lateral Movement (y-axis) [cm]')
-            ax.set_zlabel('Vertical Movement (x-axis) [cm]')
-            ax.set_xlim3d(min_val, max_val)
-            ax.set_ylim3d(min_val, max_val)
-            ax.set_zlim3d(min_val, max_val)
+                dataLines = np.array(dataLines)
+                lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
 
-            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
-            ax.view_init(elev=View[0], azim=View[1])
+                ax.set_xlabel('Apporach/Avoidance (z-axis) [cm]')
+                ax.set_ylabel('Lateral Movement (y-axis) [cm]')
+                ax.set_zlabel('Vertical Movement (x-axis) [cm]')
+                ax.set_xlim3d(min_val, max_val)
+                ax.set_ylim3d(min_val, max_val)
+                ax.set_zlim3d(min_val, max_val)
+
+                # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+                ax.view_init(elev=View[0], azim=View[1])
+                
+                ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+                line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
+                plt.show()
+
+                if Save:
+                    line_animation.save('Trajectory_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
             
-            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
-
-            line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
-            plt.show()
-
-            if Save:
-                line_animation.save('Trajectory_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
-
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
+        
         return None
 
 
@@ -2160,9 +2075,18 @@ class Plotter:
 
         AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
                    'Y':['ACCELERATION_Y_COLUMN', 1], 
-                   'Z':['ACCELERATION_COLUMN', 2]}        
+                   'Z':['ACCELERATION_COLUMN', 2]}
 
-        try:
+        # Necessary columns for plotting individual trials
+        TrialByTrialCols = (self.constants['ACCELERATION_X_COLUMN'], self.constants['ACCELERATION_Y_COLUMN'], 
+                            self.constants['ACCELERATION_COLUMN'], self.constants['STIMULUS_COLUMN'],
+                            self.constants['CORRECT_RESPONSE_COLUMN'], self.constants['TIME_COLUMN'])
+        # Some of the necessay columns for plotting participant averages. 
+        # Not all are shown since names are dynamic
+        AveragedCols = ('PID', 'time')
+
+        # Determine which DataFrame was inputted, and if necessary columns are present
+        if all (key in DF.columns for key in TrialByTrialCols):
             Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
             Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
 
@@ -2201,53 +2125,61 @@ class Plotter:
             if Save:
                 line_animation.save('3DAcceleration_{}_Stim-{}_CRes-{}.mp4'.format(participant, Stimulus, Correct_Response), writer='FFMpegWriter')
 
-        except KeyError:
-            if not stimulus: 
-                stimulus = [DF.columns[-1].split(' ')[-1]]
+        elif all (key in DF.columns for key in AveragedCols):
+    
+            try:
+                if not stimulus: 
+                    stimulus = [DF.columns[-1].split(' ')[-1]]
 
-            dataLines = []
-            labels = []
+                dataLines = []
+                labels = []
 
-            max_val = 0
-            min_val = 0
-            for mov in movement:
-                for stim in stimulus:
-                    col = 'Acc {} {}'.format(mov, stim)
-                    X = DF.loc[participant, col][AxisMap['X'][1]]
-                    Y = DF.loc[participant, col][AxisMap['Y'][1]]
-                    Z = DF.loc[participant, col][AxisMap['Z'][1]]
-                    time = DF.loc[participant, 'time'].reshape((len(X),))
+                max_val = 0
+                min_val = 0
+                for mov in movement:
+                    for stim in stimulus:
+                        col = 'Acc {} {}'.format(mov, stim)
+                        X = DF.loc[participant, col][AxisMap['X'][1]]
+                        Y = DF.loc[participant, col][AxisMap['Y'][1]]
+                        Z = DF.loc[participant, col][AxisMap['Z'][1]]
+                        time = DF.loc[participant, 'time'].reshape((len(X),))
 
-                    max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
-                    min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
+                        max_val = np.max([max_val, np.max([np.max(X), np.max(Y), np.max(Z)])])
+                        min_val = np.min([min_val, np.min([np.min(X), np.min(Y), np.min(Z)])])
 
-                    dataLines.append([Z, Y, X])
-                    labels.append('{} {}'.format(mov, stim))
+                        dataLines.append([Z, Y, X])
+                        labels.append('{} {}'.format(mov, stim))
 
-            MovFig = plt.figure()
-            ax = mplot3d.axes3d.Axes3D(MovFig)
+                MovFig = plt.figure()
+                ax = mplot3d.axes3d.Axes3D(MovFig)
 
-            dataLines = np.array(dataLines)
-            lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
+                dataLines = np.array(dataLines)
+                lines = [ax.plot(data[0, 0:1], data[1, 0:1], data[2, 0:1], label=labels[idx])[0] for idx, data in enumerate(dataLines)]
 
-            ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
-            ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
-            ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
-            ax.set_xlim3d(min_val, max_val)
-            ax.set_ylim3d(min_val, max_val)
-            ax.set_zlim3d(min_val, max_val)
+                ax.set_xlabel(r'Apporach/Avoidance (z-axis) $[\frac{m}{s^2}]$')
+                ax.set_ylabel(r'Lateral Movement (y-axis) $[\frac{m}{s^2}]$')
+                ax.set_zlabel(r'Vertical Movement (x-axis) $[\frac{m}{s^2}]$')
+                ax.set_xlim3d(min_val, max_val)
+                ax.set_ylim3d(min_val, max_val)
+                ax.set_zlim3d(min_val, max_val)
 
-            # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
-            ax.view_init(elev=View[0], azim=View[1])
+                # Set viewpoint; elev = Elevation in degrees; azim = Azimuth in degrees
+                ax.view_init(elev=View[0], azim=View[1])
+                
+                ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
+
+                line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
+                plt.show()
+
+                if Save:
+                    line_animation.save('3DAcceleration_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
             
-            ax.legend(loc='lower left', bbox_to_anchor = (0.7, 0.7))
-
-            line_animation = animation.FuncAnimation(MovFig, updateMulti, len(time), fargs=(dataLines, lines), interval=1, blit=UseBlit)
-            plt.show()
-
-            if Save:
-                line_animation.save('3DAcceleration_{}_{}_{}.mp4'.format(DF.loc[participant, 'PID'], mov, stim), writer='FFMpegWriter') 
-
+            except KeyError:
+                print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+        else:
+            print('[ERROR] - Expected columns not present in the inputted DataFrame.')
+        
         return None
 
 
@@ -2271,7 +2203,16 @@ class Plotter:
             AxisMap = None
 
         if AxisMap is not None:
-            try:
+            # Necessary columns for plotting individual trials
+            TrialByTrialCols = (self.constants[AxisMap['X'][0]], self.constants[AxisMap['Z'][0]], 
+                                self.constants['STIMULUS_COLUMN'], self.constants['CORRECT_RESPONSE_COLUMN'], 
+                                self.constants['TIME_COLUMN'], self.constants['IS_PRACTICE_COLUMN'])
+            # Some of the necessay columns for plotting participant averages. 
+            # Not all are shown since names are dynamic
+            AveragedCols = ('PID', 'time')
+
+            # Determine which DataFrame was inputted, and if necessary columns are present
+            if all (key in DF.columns for key in TrialByTrialCols):
                 Stimulus = DF[self.constants['STIMULUS_COLUMN']][participant]
                 Correct_Response = DF[self.constants['CORRECT_RESPONSE_COLUMN']][participant]
                 IsPractice = DF[self.constants['IS_PRACTICE_COLUMN']][participant]
@@ -2279,23 +2220,6 @@ class Plotter:
                 if ParentFig is None:
                     plt.figure()
                     plt.title('Stimulus: {}, Correct Response: {}, Is Practice Trial: {}'.format(Stimulus, Correct_Response, IsPractice))
-                else:
-                    ParentFig
-
-                plt.plot(DF[self.constants[AxisMap['Z'][0]]][participant]*Factor, DF[self.constants[AxisMap['X'][0]]][participant]*Factor, label = 'X-Z Movement')
-
-                plt.legend()
-                plt.grid()
-                plt.xlabel(r'Z (Ventral Axis) {}'.format(Lab))
-                plt.ylabel(r'X (Vertical Axis) {}'.format(Lab))
-
-            except KeyError:
-                if not stimulus: 
-                    stimulus = [DF.columns[-1].split(' ')[-1]]
-                
-                if ParentFig is None:
-                    plt.figure()
-                    plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
                 else:
                     ParentFig
 
@@ -2314,30 +2238,21 @@ class Plotter:
                     plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
                     plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
 
-                minx = 0
-                maxx = 0
-                minz = 0
-                maxz = 0
-
                 startColor = 'purple'
                 endColor = 'yellow'
 
-                for mov in movement:
-                    for stim in stimulus:
-                        col = '{} {} {}'.format(met, mov, stim)
-                        x = DF.loc[participant, col][AxisMap['X'][1]] * Factor
-                        z = DF.loc[participant, col][AxisMap['Z'][1]] * Factor
-                        plt.plot(z, x, label = '({} {})'.format(mov, stim))
-                        plt.scatter(z[0], x[0], color = startColor)
-                        plt.scatter(z[-1], x[-1], color = endColor)
-                        minx = np.min([minx, np.min(x)])
-                        maxx = np.max([maxx, np.max(x)])
-                        minz = np.min([minz, np.min(z)])
-                        maxz = np.max([maxz, np.max(z)])
+                z = DF[self.constants[AxisMap['Z'][0]]][participant]*Factor
+                x = DF[self.constants[AxisMap['X'][0]]][participant]*Factor
 
+                minx = np.min(x)
+                maxx = np.max(x)
+                minz = np.min(z)
+                maxz = np.max(z)
+
+                plt.plot(z, x, label = 'X-Z Movement')
                 plt.scatter(z[0], x[0], color = startColor, label = 'Start of movement')
                 plt.scatter(z[-1], x[-1], color = endColor, label = 'End of movement')
-                
+
                 handles, labels = ax.get_legend_handles_labels()
                 if showRegion:
                     approachPatch = mpl.patches.Patch(color = approachColor, label = '(Approximate) Approach region')
@@ -2352,6 +2267,77 @@ class Plotter:
                 plt.xlim([1.1*minz, 1.1*maxz])
                 plt.ylim([1.1*minx, 1.1*maxx])
 
+            elif all (key in DF.columns for key in AveragedCols):
+        
+                try:
+                    if not stimulus: 
+                        stimulus = [DF.columns[-1].split(' ')[-1]]
+                    
+                    if ParentFig is None:
+                        plt.figure()
+                        plt.title('Participant: {}'.format(DF.loc[participant, 'PID']))
+                    else:
+                        ParentFig
+
+                    ax = plt.gca()
+
+                    if showRegion:
+                        theta = np.linspace(0, 2*np.pi, 100)
+                        r = 20
+                        x1 = r * np.cos(theta) + r
+                        x2 = r * np.sin(theta)
+
+                        avoidColor = (0.8, 0.0, 0.0, 0.2)
+                        approachColor = (0.0, 1.0, 0., 0.4)
+
+                        ax.set_facecolor(avoidColor)
+                        plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
+                        plt.fill_between(x1, x2, color = approachColor[:-1], alpha = 0.15)
+
+                    minx = 0
+                    maxx = 0
+                    minz = 0
+                    maxz = 0
+
+                    startColor = 'purple'
+                    endColor = 'yellow'
+
+                    for mov in movement:
+                        for stim in stimulus:
+                            col = '{} {} {}'.format(met, mov, stim)
+                            x = DF.loc[participant, col][AxisMap['X'][1]] * Factor
+                            z = DF.loc[participant, col][AxisMap['Z'][1]] * Factor
+                            plt.plot(z, x, label = '({} {})'.format(mov, stim))
+                            plt.scatter(z[0], x[0], color = startColor)
+                            plt.scatter(z[-1], x[-1], color = endColor)
+                            minx = np.min([minx, np.min(x)])
+                            maxx = np.max([maxx, np.max(x)])
+                            minz = np.min([minz, np.min(z)])
+                            maxz = np.max([maxz, np.max(z)])
+
+                    plt.scatter(z[0], x[0], color = startColor, label = 'Start of movement')
+                    plt.scatter(z[-1], x[-1], color = endColor, label = 'End of movement')
+                    
+                    handles, labels = ax.get_legend_handles_labels()
+                    if showRegion:
+                        approachPatch = mpl.patches.Patch(color = approachColor, label = '(Approximate) Approach region')
+                        avoidancePatch = mpl.patches.Patch(color = avoidColor, label = '(Approximate) Avoid region')
+                        handles.append(approachPatch)
+                        handles.append(avoidancePatch)
+
+                    plt.legend(handles = handles)
+                    plt.grid()
+                    plt.xlabel(r'Z (Ventral Axis) {}'.format(Lab))
+                    plt.ylabel(r'X (Vertical Axis) {}'.format(Lab))
+                    plt.xlim([1.1*minz, 1.1*maxz])
+                    plt.ylim([1.1*minx, 1.1*maxx])
+                
+                except KeyError:
+                    print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
+                    print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+            else:
+                print('[ERROR] - Expected columns not present in the inputted DataFrame.')
+        
         return None
 
 
@@ -2395,3 +2381,515 @@ class Plotter:
                 Threshold = getParam(Params, 'Threshold', func))
 
         return None
+
+
+
+# Class to handle analysis of the preprocessed raw data
+class Analysis:
+
+    def __init__(self, Control, Target, constants = None, printINFO = True):
+        # If no constants are given, take them from the DataImporter Class
+        if constants is None:
+            Importer = DataImporter('DummyPath', 'DummyPath')
+            self.constants = Importer.constants
+        else:
+            self.constants = constants
+
+        self.INFO = printINFO
+        self.Control = Control
+        self.Target = Target
+
+
+    # Function to compute the mean and standard deviation of the 
+    # various independent variables (Push/Pull and Stimulus Type)
+    # and their interactions (e.g. Push Control Stimulus) for
+    # Reaction time, Peak acceleration and Peak distance
+    # Input:    DataFrame = DataFrame containing the processed AAT data
+    #           Save2CSV = Boolean to save the statistics to a csv file
+    #           SavePath = Path to save location, if None, then the 
+    #                      program will save file in the same directory
+    #                      as the program.
+    # Output:   Stats = List of dataframes containing the general 
+    #                   statistics for the reaction time, peak 
+    #                   acceleration and peak distance 
+    def GeneralStats(self, DataFrame, Save2CSV = False, SavePath = None):
+
+        def ComputeStats(header, col, Control, Target, PullIdx, PushIdx, ControlIdx, TargetIdx):
+            x = DataFrame[col]
+
+            variables = {'Push':PushIdx, 'Pull':PullIdx, '{}'.format(Control):ControlIdx, 
+                         '{}'.format(Target):TargetIdx, 'Push x {}'.format(Control):(ControlIdx & PushIdx),
+                         'Pull x {}'.format(Control):(ControlIdx & PullIdx), 'Push x {}'.format(Target):(TargetIdx + PushIdx), 
+                         'Pull x {}'.format(Target):(TargetIdx & PullIdx)}
+
+            headers = ['condition', 'mean', 'std']
+
+            data = np.zeros((len(variables.keys()), len(headers) - 1))
+            
+            for idx, key in enumerate(variables.keys()):
+                data[idx, 0] = np.nanmean(x[variables[key]])
+                data[idx, 1] = np.nanstd(x[variables[key]])
+
+            Tab = pd.DataFrame(data = data, columns=headers[1:], index = variables)
+            
+            print('\n')
+            print('===============================================================')
+            print('{} statistics'.format(header))
+            print('===============================================================')
+            print('Condition\t\t|\tMean\t\t|\tstd')
+            print('Push\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PushIdx]), np.nanstd(x[PushIdx])))
+            print('Pull\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PullIdx]), np.nanstd(x[PullIdx])))
+            print('{}\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx]), np.nanstd(x[ControlIdx])))
+            print('{}\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx]), np.nanstd(x[TargetIdx])))
+            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PushIdx]), np.nanstd(x[ControlIdx & PushIdx])))
+            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PullIdx]), np.nanstd(x[ControlIdx & PullIdx])))
+            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PushIdx]), np.nanstd(x[TargetIdx & PushIdx])))
+            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PullIdx]), np.nanstd(x[TargetIdx & PullIdx])))
+            print('===============================================================')
+            print('\n')
+
+            return Tab
+
+        # If no save path is provided, set it to the program folder
+        if SavePath is None:
+            SavePath = os.getcwd()
+
+        # Inherit control and target from class initialization 
+        Control = self.Control
+        Target = self.Target
+
+        PullIdx = (DataFrame[self.constants['CORRECT_RESPONSE_COLUMN']]=='Pull')
+        PushIdx = (DataFrame[self.constants['CORRECT_RESPONSE_COLUMN']]=='Push')
+        ControlIdx = (DataFrame[self.constants['STIMULUS_SET_COLUMN']]==Control)
+        TargetIdx = (DataFrame[self.constants['STIMULUS_SET_COLUMN']]==Target)
+        
+        print('[INFO] GENERAL STATISTICS')
+        RTStats = ComputeStats('Reaction time [ms]', self.constants['RT_COLUMN'], Control, Target, 
+                              PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        DAStats = ComputeStats('Peak acceleration [m/s^-2]', self.constants['DELTA_A_COLUMN'], Control, Target, 
+                              PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        DDStats = ComputeStats('Peak displacement [m]', self.constants['DELTA_D_COLUMN'], Control, Target, 
+                              PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        
+        if Save2CSV:
+            print('[INFO] Saving general statistics in directory: {}'.format(SavePath))
+            
+
+        return [RTStats, DAStats, DDStats]
+
+
+
+    def LinearMixedModels(self, DataFrame, Axes = ['Z'], Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False):
+        ExpectedCols = [self.constants['STIMULUS_SET_COLUMN'], self.constants['CORRECT_RESPONSE_COLUMN'],
+                        self.constants['DELTA_A_COLUMN'], self.constants['DELTA_D_COLUMN'], 
+                        self.constants['RT_COLUMN'], self.constants['PARTICIPANT_COLUMN']]
+
+        Control = self.Control
+        Target = self.Target
+
+        if SavePath is None:
+            SavePath = os.getcwd()
+
+        if Save2CSV:
+            print('[INFO] Save file directioy: {}'.format(SavePath))
+
+        DF = DataFrame.copy(deep = True)
+
+        models = {}
+
+        if all (key in DataFrame.columns for key in ExpectedCols):
+            # Remove practice trials:
+            DF = DF[(DF[self.constants['STIMULUS_SET_COLUMN']] != '{}_practice'.format(Target)) 
+                       & (DF[self.constants['STIMULUS_SET_COLUMN']] != '{}_practice'.format(Control))]
+
+            # Specify the independent variables
+            DF['is_{}'.format(Target)] = DF[self.constants['STIMULUS_SET_COLUMN']]
+            DF['is_{}'.format(Target)].replace({'{}'.format(Control):0, '{}'.format(Target):1}, inplace = True)
+            DF['is_pull'] = DF[self.constants['CORRECT_RESPONSE_COLUMN']]
+            DF['is_pull'].replace({'Push':0, 'Pull':1}, inplace = True)
+
+            # Mirror the values around 0, such that congruent motions lead to positive effects
+            # Consider, for example the following case: 
+            #       Pull = 1, Push = 0 and Happy = 1, Angry = 0
+            # We expect that congruent motions (e.g pull happy and push angry) lead to faster reactions
+            # Let us tabulate the product of the combinations of the above values
+            #       Pull    | Push
+            # Happy    1    |   0
+            #       ---------------
+            # Angry    0    |   0
+            # This implies that the only congruent motion is when we pull happy. Which is not the case, 
+            # so we need a situation where the diagonals are equal to one.
+            # Consider, now the following case:
+            #       Pull = 1, Push = -1 and Happy = 1, Angry = -1
+            #       Pull    | Push
+            # Happy    1    |   -1
+            #       ---------------
+            # Angry    -1   |   1
+            # This reflects what we are testing, which is the difference (if any) between congruent
+            # and incongruent motions
+            DF['is_{}'.format(Target)] = DF['is_{}'.format(Target)].astype(float) - 0.5
+            DF['is_pull'] = DF['is_pull'].astype(float) - 0.5
+
+            # Prepare the dependent variable columns
+            # Reaction Time
+            DF['invRT'] = 1000/DF[self.constants['RT_COLUMN']].astype(float)
+            # (Change in) Acceleration
+            DF['mda'] = DF[self.constants['DELTA_A_COLUMN']].astype(float)
+            # (Change in) Distance
+            DF['mdd'] = DF[self.constants['DELTA_D_COLUMN']].astype(float)
+            
+            # Mean center dependent variables
+            DF['invRT'] = DF['invRT'] - DF['invRT'].mean()
+            DF['mda'] = DF['mda'] - DF['mda'].mean()
+            DF['mdd'] = DF['mdd'] - DF['mdd'].mean()
+
+            # Check for any NaNs, if there are any, then remove them.
+            # While we have removed NaNs before, there are cases where there is a 'response' but 
+            # upon looking at the acceleration trace we see that this occurs at the very end
+            # of the time interval, and seems to be a faulty sensor reading (e.g. exponential 
+            # acceleration increase). Hence, there are no 'peaks' after the reaction time
+            # threshold has been passed
+
+            NaNIdxINVRT = np.where(np.isnan(DF['invRT']))[0]
+            NaNIdxMDA = np.where(np.isnan(DF['mda']))[0]
+            NaNIdxMDD = np.where(np.isnan(DF['mdd']))[0]
+
+            NaNIdx = np.unique(np.hstack((NaNIdxINVRT, NaNIdxMDA, NaNIdxMDD)))
+
+            # Since the DF index does not necessarily correspond to the index found by 
+            # np.where (since the DF index can be anything, while np.where returns the
+            # integer index), we will create an array of booleans with length equal to 
+            # that of the DF. We will replace the indices with NaN values with False
+            # and use this array to remove these rows from the DF. 
+            BoolIdx = np.ones(len(DF.index), dtype=bool)
+            BoolIdx[NaNIdx] = False
+
+            print('\n[WARNING] Removing data from {} trials ({}% of total trials) due to missing information'.format(len(NaNIdx), len(NaNIdx)/len(DF.index)*100))
+
+            DF = DF.iloc[BoolIdx]
+
+            # Linear Mixed Models 
+            # Reaction time
+            print('\n')
+            print('[INFO] Linear Mixed Model: Reaction Time (1/RT)')
+            md = smf.mixedlm(formula = 'invRT ~ is_pull * is_happy', data = DF, 
+                            groups=DF['participant'].astype('category'), 
+                            re_formula='~is_pull * is_happy')
+            mdf = md.fit()
+            print(mdf.summary())
+            print('\n')
+
+            models.update({'rt':md})
+
+            if Save2CSV:
+                filename = 'LMM_Results_ReactionTime.csv'
+                print('[INFO] Saving (Reaction Time) model results to file {}')
+                mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
+
+            # (Change in) Acceleration
+            print('[INFO] Linear Mixed Model: (Change in) Acceleration')   
+            md = smf.mixedlm(formula = 'mda ~ is_pull * is_happy', data = DF, 
+                            groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
+                            re_formula='~is_pull * is_happy')
+            mdf = md.fit()
+            print(mdf.summary())
+            print('\n')
+
+            models.update({'mda':md})
+
+            if Save2CSV:
+                filename = 'LMM_Results_Acceleration.csv'
+                print('[INFO] Saving (acceleration) model results to file {}')
+                mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
+
+            # (Change in) Distance
+            print('[INFO] Linear Mixed Model: (Change in) Distance')   
+            md = smf.mixedlm(formula = 'mdd ~ is_pull * is_happy', data = DF, 
+                            groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
+                            re_formula='~is_pull * is_happy')
+            mdf = md.fit()
+            print(mdf.summary())
+            print('\n')
+
+            models.update({'mdd':md})
+
+            if Save2CSV:
+                filename = 'LMM_Results_Distance.csv'
+                print('[INFO] Saving (distance) model results to file {}')
+                mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
+
+
+        else:
+            print('[ERROR] - Expected columns not found for linear mixed models, please check inputted DataFrame')
+            if Verbose:
+                print('\t Expected ALL of the following columns: {}'.format(ExpectedCols))
+
+        if ReturnModel:
+            DF = (DF, models)
+
+        return DF
+
+
+
+    def RestructureAvgDF(self, AveragedDF):
+
+        def FillColData(PID, DF, Movement, Stimulus, Metrics = {'RT':self.constants['RT_COLUMN'], 'DeltaA':self.constants['DELTA_A_COLUMN'], 'DeltaD':self.constants['DELTA_D_COLUMN']}):
+            row = {self.constants['PARTICIPANT_COLUMN']:PID,
+                   self.constants['CORRECT_RESPONSE_COLUMN']:Movement,
+                   self.constants['STIMULUS_SET_COLUMN']:Stimulus
+                   }
+
+            for metric in Metrics.keys():
+                col = '{} {} {}'.format(metric, Movement, Stimulus)
+                row.update({Metrics[metric]:DF.loc[PID, col]})
+
+            return row
+
+        DF = AveragedDF.copy()
+        DF.set_index(['PID'])
+
+        if self.INFO:
+            indices = tqdm(DF.index)
+        else:
+            indices = DF.index
+
+        RestructuredDF = []
+
+        for pid in indices:
+            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Control))
+            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Target))
+            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Control))
+            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Target))
+
+        RestructuredDF = pd.DataFrame(RestructuredDF)
+
+        return RestructuredDF
+
+
+
+    def AverageBetweenParticipant(self, DFWithinParticipant):
+        Control = self.Control
+        Target = self.Target
+        
+        DF = DFWithinParticipant.copy(deep = True)
+
+        if self.INFO:
+            print('[INFO] Averaging results between participants')
+
+        try:
+            _dummy = DF['Acc Pull {}'.format(Control)]
+            _dummy = DF['Acc Pull {}'.format(Target)]
+        except KeyError:
+            print('[WARNING] in function <AverageBetweenParticipant> - Inputted DataFrame has not yet been averaged within participants')
+            print('\t Attempting to average within participants, calling <AverageWithinParticipant>...')
+            DF = self.AverageWithinParticipant(DFWithinParticipant)
+        
+        DF = DF.set_index(['PID'])
+        
+        if self.INFO:
+            iterations = tqdm(DF.index)
+        else:
+            iterations = DF.index
+
+        N = len(DF)
+        times = DF['time']
+
+        maxT = np.max(times.map(np.max))
+        minT = np.min(times.map(np.min))
+
+        dt = 1
+        unifiedTime = np.arange(minT, maxT + dt, dt)
+        unifiedTime = unifiedTime.reshape((1, len(unifiedTime)))
+        dataHost = unifiedTime.copy() * 0
+        dataHost = dataHost.astype(float)
+
+        # Create empty dictionary to store data
+        data = {}
+        for col in DF.columns:
+            data.update({col:[]})
+        
+        FactorMap = {}
+        MissingData = np.sum(DF.isnull())
+        for idx, col in enumerate(DF.columns):
+            FactorMap.update({col:(1/(N - MissingData[idx]))})
+
+        for pIdx, pid in enumerate(iterations):
+            pData = DF.loc[pid, :]
+            pTime = pData['time']
+            try:
+                pStartIdx = np.where(unifiedTime[0] >= pTime[0])[0][0]
+                pEndIdx = np.where(unifiedTime[0] >= pTime[-1])[0][0] + 1
+            # If this error arises, it means that there is no time data (participant only
+            # completed practice trials)
+            # TODO: Flag for removal
+            except TypeError:
+                pass
+            
+            for cIdx, col in enumerate(pData.index):
+                try:
+                    # We are dealing with values (e.g. RT)
+                    if len(pData[col].shape) == 0:
+                        surrogateData = pData[col] * FactorMap[col]
+                        ax = None
+
+                    # # Then we are dealing with a 1-d array (time)
+                    elif col == 'time':
+                        surrogateData = unifiedTime.copy() * FactorMap[col]
+                        ax = 1
+                    # Otherwise, we need to loop through entries of n-d array
+                    else:
+                        n = len(pData[col])
+                        # Create n copies of surrogateData to be filled in
+                        tup = []
+                        for row in range(pData[col].shape[0]):
+                            tup.append(dataHost.copy())
+                        surrogateData = np.vstack(tuple(tup))
+                        surrogateData[:, pStartIdx:pEndIdx] = pData[col] * FactorMap[col]
+                        ax = 1
+
+                # When value error is raised, there is no data for that column, so leave data empty
+                except AttributeError:
+                    surrogateData = data[col]
+                
+                if pIdx != 0:
+                    oldData = data[col]
+                    newData = oldData.copy()
+                    if ax:
+                        for row in range(surrogateData.shape[0]):
+                            newData[row] = np.nansum(np.vstack((oldData[row], surrogateData[row])), axis = (ax-1))
+                    else:
+                        if not np.isnan(pData[col]):
+                            newData = np.nansum(np.vstack((oldData, surrogateData)))
+                else: 
+                    newData = surrogateData
+
+                data.update({col : newData})
+
+
+        data.update({'PID' : 'Average'})
+        AvgDF = pd.DataFrame(data=[data.values()], columns=data.keys())
+
+        return AvgDF
+
+
+
+    def AverageWithinParticipant(self, DataFrame):
+        Control = self.Control
+        Target = self.Target
+
+        DF = DataFrame.copy(deep = True)
+        DFByPID = DF.set_index([self.constants['PARTICIPANT_COLUMN']])
+        UniquePIDs = np.unique(DF[self.constants['PARTICIPANT_COLUMN']])
+
+        if self.INFO:
+            print('[INFO] Averaging results within participants...')
+            iterations = tqdm(UniquePIDs)
+        else:
+            iterations = UniquePIDs
+
+        NumParticipants = len(UniquePIDs)
+        metrics = {'Acc' : [np.array(np.nan)]*NumParticipants, 
+                   'Dist' : [np.array(np.nan)]*NumParticipants, 
+                   'RT' : np.nan, 
+                   'DeltaA' : np.nan,
+                   'DeltaD' : np.nan}
+        movements = ['Push', 'Pull']
+
+        Cols = {'PID' : ' ',
+                'time' : [np.array(np.nan)]*NumParticipants}
+        for mov in movements:
+            for m in metrics.keys():
+                Cols.update({'{} {} {}'.format(m, mov, Control) : metrics[m]})
+                Cols.update({'{} {} {}'.format(m, mov, Target) : metrics[m]})
+
+        Data = []
+
+        for idx, pid in enumerate(iterations):
+            ParticipantData = DFByPID.loc[pid, :]
+            N = len(ParticipantData)
+            PracticeIdx = np.where(DFByPID.loc[pid, 'is_practice'])[0]
+            AllIdx = np.arange(0, N, 1)
+            AllIdx = np.delete(AllIdx, PracticeIdx)
+            ParticipantData = ParticipantData.iloc[AllIdx, :]
+            times = ParticipantData[self.constants['TIME_COLUMN']]
+            maxT = np.max(times.map(max))
+            minT = np.min(times.map(min))
+
+            # Some participants didn't even get past the practice trials
+            if len(AllIdx) > 0:
+                dt = 1
+                UnifiedTime = np.arange(minT, maxT + dt, dt)
+                
+                Data.append(Cols.copy())
+                Data[idx]['PID'] = pid
+                Data[idx]['time'] = UnifiedTime
+
+                for mov in movements:
+                    C_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Control)
+                    T_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Target)
+                    for i, m in enumerate(metrics):
+                        Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[i]
+                        Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[i]
+            else:
+                Data.append(Cols.copy())
+                for col in Cols.keys():
+                    Data[-1][col] = np.nan
+                Data[-1]['PID'] = pid
+        
+        OutDF = pd.DataFrame(Data)
+
+        return OutDF
+
+
+
+    def _AverageOverCondition(self, participantData, unifiedTime, movement, stimulus):
+        movementIdx = np.where(participantData[self.constants['CORRECT_RESPONSE_COLUMN']] == movement)[0]
+        stimulusIdx = np.where(participantData[self.constants['STIMULUS_SET_COLUMN']] == stimulus)[0]
+        conditionIdx = np.intersect1d(movementIdx, stimulusIdx)
+
+        condData = participantData.iloc[conditionIdx, :]
+        N = len(condData)
+
+        if N > 0:
+            times = condData[self.constants['TIME_COLUMN']]
+
+            Acc = np.zeros((3, N, len(unifiedTime)))
+            Dist = np.zeros((3, N, len(unifiedTime)))
+
+            for i in range(N):
+                startIdx = np.where(unifiedTime >= times[i][0])[0][0]
+                endIdx = np.where(unifiedTime >= times[i][-1])[0][0] + 1
+
+                iData = condData.iloc[i, :]
+
+                Acc[0, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_X_COLUMN']]
+                Acc[1, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_Y_COLUMN']]
+                Acc[2, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_COLUMN']]
+
+                Dist[0, i, startIdx:endIdx] = iData[self.constants['DISTANCE_X_COLUMN']]
+                Dist[1, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Y_COLUMN']]
+                Dist[2, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Z_COLUMN']]
+
+            # Runtime warnings may appear due to this averaging, since there could instances where
+            # we are averaging arrays of just nans. 
+            AvgAcc = np.nanmean(Acc, axis = 1)
+            AvgDist = np.nanmean(Dist, axis = 1)
+
+            RTs = condData[self.constants['RT_COLUMN']]
+            AvgRT = np.nanmean(RTs.map(np.nanmean))
+
+            DAs = condData[self.constants['DELTA_A_COLUMN']]
+            AvgDA = np.nanmean(DAs.map(np.nanmean))
+
+            DDs = condData[self.constants['DELTA_D_COLUMN']]
+            AvgDD = np.nanmean(DDs.map(np.nanmean))
+
+        # Some participants did not complete all conditions 
+        else:   
+            AvgAcc = np.nan
+            AvgDist = np.nan
+            AvgRT = np.nan
+            AvgDA = np.nan
+            AvgDD = np.nan
+
+        return [AvgAcc, AvgDist, AvgRT, AvgDA, AvgDD]

@@ -81,9 +81,9 @@ SaveDirectory = '\\'.join(os.getcwd().split('\\')[:-1])
 TrialPoint = 5
 
 # First, we can initialize the Plotter() class. To remain consistent
-# with the DataImporter class, we need to input the constants from 
-# the DataImporter class
-Plot = AAT.Plotter(DataImporter.constants)
+# with the DataImporter class, we can specify the constants used in 
+# the DataImporter class. 
+Plot = AAT.Plotter(constants = DataImporter.constants)
 
 # For each plot, we need to supply the trial point, and the dataframe
 # from which we will extract data. 
@@ -114,23 +114,32 @@ Plot.AnimateTrajectory3D(TrialPoint, PreprocessedData)
 # So far, we have only looked at individual trials of participants
 # It is more insightful to look at their averages over the 
 # various conditions. For example, the average of their Reaction
-# Time for all Pull happy trials. To average the data (within 
-# participant) for each condition, we may use the following
-# function from the DataImporter class
-#
-# Here we input the preprocessed data. We also need to specify the 
+# Time for all Pull happy trials. To facilitate this,, we may use
+# the Analysis class
+
+# Initialize Analysis class. Since this class relies explicitly on
+# the stimulus names, we need to specify the 'control' and 'target'
+# stimuli names. In this case, they are 'angry' and 'happy' 
+# respectively. 
+# Again we can specify the DataImporter constants for consistency
+Analysis = AAT.Analysis('angry', 'happy', constants = DataImporter.constants)
+
+# To average the data (within participant) for each condition,
+# we input the preprocessed data. We also need to specify the 
 # controls (e.g. angry) and targets (e.g. happy) such that the
 # relevant conditional columns can be generated. These should
 # correspond to the control and target names in the raw data
 # (note, that this is also case sensitive!)
 
-WithinPAvgData = DataImporter.AverageWithinParticipant(PreprocessedData, 'angry', 'happy')
+WithinPAvgData = Analysis.AverageWithinParticipant(PreprocessedData)
 # Now that the columns are different, we can inspect them. Here:
 #       'PID' = Participant ID
 #       'time' = Unified time array
 #       'Acc ___ ___' = Acceleration for push/pull for control/target
 #       'Dist ___ ___' = Distance for push/pull for control/target
 #       'RT ___ ___' = Reaction time for push/pull for control/target
+#       'DeltaA ___ ___' = Peak reaction acceleration
+#       'DeltaD ___ ___' = Peak reaction distance
 print('New column names: {}'.format(WithinPAvgData.columns))
 
 # We can make use of the same plotting functions to illustrate this averaged data
@@ -155,7 +164,7 @@ Plot.AnimateTrajectory3D(ParticipantNum, WithinPAvgData, UseBlit=True, movement 
 # We can go one step further, and compute the averages across pariticpants
 # To do this, we make use of the following function. Here, we must input the 
 # data that has already been averaged within participants 
-AveragedData = DataImporter.AverageBetweenParticipant(WithinPAvgData, 'angry', 'happy')
+AveragedData = Analysis.AverageBetweenParticipant(WithinPAvgData)
 
 # In this case, there is only one 'participant' (PID = 'Average') therefore:
 ParticipantNum = 0
