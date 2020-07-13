@@ -11,6 +11,8 @@ import json
 import scipy.interpolate as spinter
 import scipy.signal as spsig
 from tqdm import tqdm
+import PySimpleGUI as sg
+import time
 
 from mpl_toolkits import mplot3d
 from matplotlib import pyplot as plt
@@ -145,7 +147,10 @@ class DataImporter:
     # Output:   None
     def SaveDF(self, filename, dataframe, path):
         os.chdir(path)
-        dataframe.to_pickle('./{}'.format(filename))
+        if filename[-3:] == 'csv':
+            dataframe.to_csv('./{}'.format(filename))
+        else:
+            dataframe.to_pickle('./{}'.format(filename))
         os.chdir(self.cwd)
         return None
 
@@ -156,9 +161,12 @@ class DataImporter:
     #           path = Path to the file
     # Output:   df = DataFrame containing data from filename
     def LoadDF(self, filename, path):
-        os.chdir(path)
-        df = pd.read_pickle(os.path.join(path, filename))
-        os.chdir(self.cwd)
+        if path is not None:
+            os.chdir(path)
+            df = pd.read_pickle(os.path.join(path, filename))
+            os.chdir(self.cwd)
+        else:
+            df = pd.read_pickle(filename)
         return df
 
 
@@ -182,7 +190,7 @@ class DataImporter:
     #                      Default = False
     # Output:   DF: Updated version of the input 'processedData' containing
     #               the peak accelerations and distances
-    def ComputeDeltaAandD(self, processedData, axes = ['Z'], absolute=False):
+    def ComputeDeltaAandD(self, processedData, axes = ['Z'], absolute=False, which = ['acceleration', 'distance'], sgParams=None):
 
         def _Delta(row, axes, Map, pos = 1):
             t = row[self.constants['TIME_COLUMN']]
@@ -214,8 +222,22 @@ class DataImporter:
             'Y':['DISTANCE_Y_COLUMN', 'ACCELERATION_Y_COLUMN'], 
             'Z':['DISTANCE_Z_COLUMN', 'ACCELERATION_COLUMN']}
 
-        DF[self.constants['DELTA_A_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 1), axis = 1)
-        DF[self.constants['DELTA_D_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 0), axis = 1)
+        if 'acceleration' in which:
+            if self.INFO:
+                print('[INFO] Computing reaction force (RF)...')
+            if sgParams:
+                sgParams['OUTPUT'].print('[ INFO ] Computing reaction force (RF)...')
+                sgParams['PERCENTAGE'].Update('- %')
+                sgParams['TIME'].Update('Time remaining: - [s]')
+            DF[self.constants['DELTA_A_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 1), axis = 1)
+        if 'distance' in which:
+            if self.INFO:
+                print('[INFO] Computing reaction distance (RD)...')
+            if sgParams:
+                sgParams['OUTPUT'].print('[ INFO ] Computing reaction distance (RD)...')
+                sgParams['PERCENTAGE'].Update('- %')
+                sgParams['TIME'].Update('Time remaining: - [s]')
+            DF[self.constants['DELTA_D_COLUMN']] = DF.apply(lambda row: _Delta(row, axes, AxisMap, pos = 0), axis = 1)
 
         return DF
 
@@ -242,7 +264,7 @@ class DataImporter:
     #                                  that total distances will not be computed. 
     # Output:   DF_out = The same as the input DataFrame, but with new columns containing
     #                    the computed displacements (distances). 
-    def ComputeDistance(self, DataFrame, ComputeTotalDistance = False):
+    def ComputeDistance(self, DataFrame, ComputeTotalDistance = False, sgParams = None):
 
         # Function to integrate the acceleration data to obtain velocities and 
         # distances
@@ -272,9 +294,27 @@ class DataImporter:
         else:
             iterrows = DF.iterrows()
 
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Computing distances...')
+
         DF_out_list = []
 
+        execution_time = 0
+        sTime = time.time()
+
         for idx, row in iterrows:
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(idx+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(idx + 1, DF.shape[0])
+                timeRemainingS = execution_time/(idx + 1) * (DF.shape[0] - idx + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
             # Calculation of Distance and Velocity
             # Create acceleration vector
             _acc_vec = np.vstack((row[self.constants['ACCELERATION_X_COLUMN']],
@@ -298,6 +338,8 @@ class DataImporter:
             
             DF_out_list.append(DataRow)
 
+            execution_time = time.time() - sTime
+
         # Compile new dataframe with distance data
         DF_out = pd.concat(DF_out_list, axis = 1).transpose()
 
@@ -314,7 +356,7 @@ class DataImporter:
     # Output:   CorrectedData = A DataFrame resembling the input DataFrame, but
     #                        with rotation correct accelerations and (if set)
     #                        the corresponding rotation angles
-    def Correct4Rotations(self, DataFrame, StoreTheta = True):
+    def Correct4Rotations(self, DataFrame, StoreTheta = True, sgParams = None):
         DF = DataFrame.copy(deep = True)
 
         # If the user decided to display information to the terminal window
@@ -323,6 +365,9 @@ class DataImporter:
             iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
             iterrows = DF.iterrows()
+        
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Correcting accelerations for (any) rotations during reaction...')
         
         # Preallocate list to store corrected data, which will later be compiled
         # into the output dataframe
@@ -335,7 +380,23 @@ class DataImporter:
         # Set angle threshold, above which a rotation is considered to be occuring
         AngleThreshold = 1*np.pi/180.
 
+        execution_time = 0
+        sTime = time.time()
+
         for idx, row in iterrows:
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(idx+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(idx + 1, DF.shape[0])
+                timeRemainingS = execution_time/(idx + 1) * (DF.shape[0] - idx + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
+        
             # If there is gyroscopic data available, compute rotations
             try: 
                 if len(row[self.constants['GYRO_X_COLUMN']]):
@@ -381,6 +442,7 @@ class DataImporter:
                     DataRow = row.copy(deep = True)
 
             CorrectedDataList.append(DataRow)
+            execution_time = time.time() - sTime
 
         # Compile new dataframe with corrected data
         CorrectedData = pd.concat(CorrectedDataList, axis = 1).transpose()
@@ -533,7 +595,7 @@ class DataImporter:
     # Input:    DataFrame = (Filtered) dataframe containing the AAT data
     # Output:   ResampledDF = The same as DataFrame, but with resampled data and a unified
     #                         time array (gyro time array column now removed)
-    def ResampleData(self, DataFrame):
+    def ResampleData(self, DataFrame, sgParams = None):
         DF = DataFrame.copy(deep = True)
         
         # If the user decided to display information to the terminal window
@@ -542,14 +604,34 @@ class DataImporter:
             iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
             iterrows = DF.iterrows()
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Resampling the sensor data...')
 
         ResampledList = []
+
+        execution_time = 0
+        sTime = time.time()
 
         # Resample the rows. The columns specified by DataCols2Resample in __init__()
         # will be resampled
         for i, row in iterrows:
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(i+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(i + 1, DF.shape[0])
+                timeRemainingS = execution_time/(i + 1) * (DF.shape[0] - i + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
+
             _ResampledRow = self._ResampleRow(row)
             ResampledList.append(_ResampledRow)
+
+            execution_time = time.time() - sTime
 
         # Recompile the dataframe with the resampled data
         ResampledDF = pd.concat(ResampledList, axis = 1).transpose()
@@ -656,7 +738,7 @@ class DataImporter:
     # Function to filter missing data (i.e. NaN fields)
     # Input:    DataFrame = DataFrame containing the (raw) AAT data
     # Output:   DF = Filtered DataFrame with NaN data removed
-    def FilterNaNs(self, DataFrame):
+    def FilterNaNs(self, DataFrame, sgParams = None):
         DF = DataFrame.copy(deep = True)
 
         N = DF.shape[0]
@@ -676,6 +758,11 @@ class DataImporter:
         if self.INFO:
             print('[INFO] Filtering results:')
             print('[INFO] \t Percentage of data which is missing: {}'.format(len(Indices_to_remove_NaN)/N*100))
+        
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Removing missing data...')
+            sgParams['OUTPUT'].print('[ INFO ]\t Percentage of data which is missing: {:3d} %'.format(int(len(Indices_to_remove_NaN)/N*100)), text_color = 'blue')
+
 
         # Remove rows with NaN values 
         DF = DF.drop(index = Indices_to_remove_NaN)
@@ -702,7 +789,7 @@ class DataImporter:
     #           RTPeakDistance = Minimum allowed distance between peaks (in milliseconds)
     # Output:   DF = Dataframe with reaction times (returns a copy of input DataFrame but
     #                with a new column for the reaction times)    
-    def ComputeRT(self, DataFrame, RTResLB = 0.8, RTHeightThresRatio = 0.3, RTPeakDistance = 10):
+    def ComputeRT(self, DataFrame, RTResLB = 0.8, RTHeightThresRatio = 0.3, RTPeakDistance = 10, sgParams = None):
         DF = DataFrame.copy(deep = True)
         # If the user decided to display information to the terminal window
         if self.INFO:
@@ -710,12 +797,27 @@ class DataImporter:
             iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
             iterrows = DF.iterrows()
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Computing Reaction times...')
 
         # Define constants and preallocate empty Dataframe series to host RTs
         N = DF.shape[0]
         RTs = pd.Series(index = np.arange(0, N), name = self.constants['RT_COLUMN'])
-
+        execution_time = 0
+        sTime = time.time()
         for i, row in iterrows:
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Computing reaction times...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(i+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(i + 1, DF.shape[0])
+                timeRemainingS = execution_time/(i + 1) * (DF.shape[0] - i + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
             # Some signals have a lot of jitter at the beginning with relatively high accelerations. To reduce the number of participants
             # falsely identified as having too fast reaction times, we will consider any peak larger than RTHeighThresRatio of the highest 
             # peak as a significant peak. However, there are also participants with no reactions, in which case we take the absolute 
@@ -730,6 +832,28 @@ class DataImporter:
                 RTs[i] = row[self.constants['TIME_COLUMN']][RT_idx] - RTPeakDistance
             except IndexError:
                 RTs[i] = 'No Reaction'
+
+            # # First find all peaks in abs(signal)
+            # all_peaks = spsig.find_peaks(abs(row[self.constants['ACCELERATION_COLUMN']]), distance = RTPeakDistance, height = RTHeightThres)
+            # # If there are peaks, given the threshold conditions
+            # if len(all_peaks[0]):
+            #     # Use these all peaks to find the peak prominences: We expect that the main response will have the highest prominence values
+            #     prominences = spsig.peak_prominences(abs(row[self.constants['ACCELERATION_COLUMN']]), all_peaks[0])[0]
+            #     # Given the shape of the signal, there should be 2 peaks (one corresponding to the initial direction, and the other returning to 
+            #     # 'origin'). The return acceleration could be higher than the initial reaction. Hence, we will take half of the highest
+            #     # prominence as our threshold. 
+
+            #     min_prominence = np.sort(prominences[::-1])[0]/2
+            #     peaks = spsig.find_peaks(abs(row[self.constants['ACCELERATION_COLUMN']]), prominence = min_prominence, distance = RTPeakDistance, height = RTHeightThres)
+            #     initial_peak_idx = peaks[0][0]
+
+            #     # The final reaction time is given by the time of the peak minus the time at the start of the measurement minus the minimum peak 
+            #     # distance to account for the fact that the reaction occurs before the peak. 
+            #     RTs[i] = row[self.constants['TIME_COLUMN']][initial_peak_idx] - row[self.constants['TIME_COLUMN']][0] - RTPeakDistance
+            # else:
+            #     RTs[i] = 'No Reaction'
+
+            execution_time = time.time() - sTime
         DF[self.constants['RT_COLUMN']] = RTs
         return DF
 
@@ -929,7 +1053,7 @@ class DataImporter:
     #                        average reasonable acceleration)
     # Outputs:  DF = Filtered dataframe
     #           Removed_data = Dataframe containing the removed data
-    def FilterData(self, Data, MinDataRatio = 0.8, RemoveRT = True, KeepNoRT = False, RTThreshold = 200, CalibrateAcc = True, RemoveAcc = True, MaxArmDist = {'female':0.735, 'male':0.810}):
+    def FilterData(self, Data, MinDataRatio = 0.8, RemoveRT = True, KeepNoRT = False, RTThreshold = 200, CalibrateAcc = True, RemoveAcc = True, MaxArmDist = {'female':0.735, 'male':0.810}, sgParams = None):
         # Make a copy of the data frame (such that we do not make changes to the input data frame directly)
         DF = Data.copy(deep = True)
 
@@ -939,6 +1063,10 @@ class DataImporter:
                 pass
         except KeyError:
             print('[WARNING] The inputted DataFrame for <FilterData> does not have a reaction time column.\n\tI will try to compute reaction times here.\n\tNOTE: Default values are being used.')
+            
+            if sgParams:
+                sgParams['OUTPUT'].print('[ WARNING ] The passed DataFrame does not have a reaction time column \n\tI will try to compute reaction times here.\n\tNOTE: Default values are being used.', color = 'red')
+            
             DF = self.ComputeRT(DF)
 
         # If the user as opted to display information
@@ -947,6 +1075,8 @@ class DataImporter:
             iterrows = tqdm(DF.iterrows(), total=DF.shape[0])
         else:
             iterrows = DF.iterrows()
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Filtering data...')
 
         # Initialize lists and constants
         N = DF.shape[0]
@@ -963,7 +1093,22 @@ class DataImporter:
         ParticipantIDX = []
         PreviousParticipantName = 'DummyParticipant'
 
+        execution_time = 0
+        sTime = time.time()
+
         for i, row in iterrows:
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(i+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(i + 1, DF.shape[0])
+                timeRemainingS = execution_time/(i + 1) * (DF.shape[0] - i + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
             # Get current participant name
             CurrentParticipantName = row[self.constants['PARTICIPANT_COLUMN']]
             # Check if the current row participant is different from the previous row participant
@@ -971,7 +1116,7 @@ class DataImporter:
                 # Store row indices of the start of each unique participant ID 
                 ParticipantIDX.append(i)
                 PreviousParticipantName = CurrentParticipantName
-            elif i == len(iterrows) - 1:
+            elif i == DF.shape[0] - 1:
                 # Store last index to get IDX range of last participant
                 ParticipantIDX.append(i)
 
@@ -1002,7 +1147,9 @@ class DataImporter:
                 # Need to check if there is the necessary info in the given row. 
                 if not self._HasRealisticAccelerations(row, MaxArmDist):
                     Indices_to_remove_Acc.append(i)
-        
+
+            execution_time = time.time() - sTime
+
         # Combine the indices to remove (and skip repeated indices)
         # If user opted to keep no reaction data (e.g. for computing more sensor noise characteristics)
         if KeepNoRT:
@@ -1031,7 +1178,10 @@ class DataImporter:
                 RemoveIdx = np.where(DF[self.constants['PARTICIPANT_COLUMN']].str.contains(DF.loc[ParticipantIDX[i], self.constants['PARTICIPANT_COLUMN']]))[0]
                 Indices_to_remove.extend(RemoveIdx.tolist())
                 NumRemoveInvalid += len(RemoveIdx)
-                print('[INFO] Particiapnt {} has too little data, removing...'.format(DF.loc[ParticipantIDX[i], self.constants['PARTICIPANT_COLUMN']]))
+                if self.INFO:
+                    print('[INFO] Particiapnt {} has too little data, removing...'.format(DF.loc[ParticipantIDX[i], self.constants['PARTICIPANT_COLUMN']]))
+                if sgParams:
+                    sgParams['OUTPUT'].print('[ INFO ] Particiapnt {} has too little data, removing...'.format(DF.loc[ParticipantIDX[i], self.constants['PARTICIPANT_COLUMN']]))
 
         # Remove repeated indices
         Indices_to_remove = np.unique(Indices_to_remove)
@@ -1046,6 +1196,17 @@ class DataImporter:
                 print('[INFO] \t Percentage of data with implausible accelerations: {}'.format(len(Indices_to_remove_Acc)/N*100))
             print('[INFO] Total percentage of data removed due to not enough valid data: {}'.format(NumRemoveInvalid/N*100))
             print('[INFO] Total percentage of data filetered (Keep No Reactions = {}): {}'.format(KeepNoRT, len(Indices_to_remove)/N*100))
+
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Filtering results:')
+            if RemoveRT:
+                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with implausible (<{} ms) reaction times: {:3f}'.format(RTThreshold, float(len(Indices_to_remove_RT)/N*100)), text_color = 'blue')
+                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with No Reaction: {}'.format(len(NoReaction_idx)/N*100), text_color = 'blue')
+            if RemoveAcc:
+                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with implausible accelerations: {:3f}'.format(float(len(Indices_to_remove_Acc)/N*100)), text_color = 'blue')
+            sgParams['OUTPUT'].print('[ INFO ] Total percentage of data removed due to not enough valid data: {:3f}'.format(float(NumRemoveInvalid/N*100)), text_color = 'blue')
+            sgParams['OUTPUT'].print('[ INFO ] Total percentage of data filetered (Keep No Reactions = {}): {:3f}'.format(KeepNoRT, float(len(Indices_to_remove)/N*100)), text_color = 'blue')
+ 
         
         # Remove data from dataframe
         Removed_Data = DF[DF.index.isin(Indices_to_remove)]
@@ -1062,8 +1223,7 @@ class DataImporter:
     #                  initialization, and other definitions within this class, to import and organize
     #                 the raw data appropriately.
     # Returns:  Data - Raw imported data of all participants (in provided raw data file path) as a 
-    #                  pandas dataframe.
-    def ImportData(self):
+    def ImportData(self, sgParams = None):
         # Initialize data as a list (to be filled in with condition tables)
         # Later on, this list will be converted into a DataFrame. Since the 
         # exact number of rows is unknown, a dataframe of N x M cannot be 
@@ -1075,8 +1235,25 @@ class DataImporter:
             files = tqdm(os.listdir(self.data_path))
         else:
             files = os.listdir(self.data_path)
+        if sgParams:
+            sgParams['OUTPUT'].print('[ INFO ] Loading Participant Data...')
         # For each file in the data_path 
-        for f in files:
+        execution_time = 0
+        sTime = time.time()
+        for i, f in enumerate(files):
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Importing Data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(i+1)/len(files))))
+                sgParams['PROG_BAR'].UpdateBar(i + 1, len(files))
+                timeRemainingS = execution_time/(i + 1) * (len(files) - i + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
+
             # We are only interested in the .json files
             # NOTE: All data for one participant is contained within a single .json file
             # Therefore, 'for f in files' is equivalent as for each participant...
@@ -1111,6 +1288,7 @@ class DataImporter:
     
                     self._CondTable[self._CatQCols] = self._CondTable[self._CatQCols].astype('category')
                     self._Data.append(self._CondTable)
+            execution_time = time.time() - sTime
         # Create pandas DataFrame from data
         Data = pd.concat(self._Data, sort = True).reset_index()
         
@@ -2466,10 +2644,12 @@ class Analysis:
         print('[INFO] GENERAL STATISTICS')
         RTStats = ComputeStats('Reaction time [ms]', self.constants['RT_COLUMN'], Control, Target, 
                               PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
-        DAStats = ComputeStats('Peak acceleration [m/s^-2]', self.constants['DELTA_A_COLUMN'], Control, Target, 
-                              PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
-        DDStats = ComputeStats('Peak displacement [m]', self.constants['DELTA_D_COLUMN'], Control, Target, 
-                              PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        if self.constants['DELTA_A_COLUMN'] in DataFrame.columns:  
+            DAStats = ComputeStats('Peak acceleration [m/s^-2]', self.constants['DELTA_A_COLUMN'], Control, Target, 
+                                PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        if self.constants['DELTA_D_COLUMN'] in DataFrame.columns:  
+            DDStats = ComputeStats('Peak displacement [m]', self.constants['DELTA_D_COLUMN'], Control, Target, 
+                                PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
         
         if Save2CSV:
             print('[INFO] Saving general statistics in directory: {}'.format(SavePath))
@@ -2479,9 +2659,8 @@ class Analysis:
 
 
 
-    def LinearMixedModels(self, DataFrame, Axes = ['Z'], Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False):
+    def LinearMixedModels(self, DataFrame, Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False):
         ExpectedCols = [self.constants['STIMULUS_SET_COLUMN'], self.constants['CORRECT_RESPONSE_COLUMN'],
-                        self.constants['DELTA_A_COLUMN'], self.constants['DELTA_D_COLUMN'], 
                         self.constants['RT_COLUMN'], self.constants['PARTICIPANT_COLUMN']]
 
         Control = self.Control
@@ -2533,28 +2712,34 @@ class Analysis:
             # Prepare the dependent variable columns
             # Reaction Time
             DF['invRT'] = 1000/DF[self.constants['RT_COLUMN']].astype(float)
-            # (Change in) Acceleration
-            DF['mda'] = DF[self.constants['DELTA_A_COLUMN']].astype(float)
-            # (Change in) Distance
-            DF['mdd'] = DF[self.constants['DELTA_D_COLUMN']].astype(float)
-            
-            # Mean center dependent variables
+            # Mean center
             DF['invRT'] = DF['invRT'] - DF['invRT'].mean()
-            DF['mda'] = DF['mda'] - DF['mda'].mean()
-            DF['mdd'] = DF['mdd'] - DF['mdd'].mean()
-
             # Check for any NaNs, if there are any, then remove them.
             # While we have removed NaNs before, there are cases where there is a 'response' but 
             # upon looking at the acceleration trace we see that this occurs at the very end
             # of the time interval, and seems to be a faulty sensor reading (e.g. exponential 
             # acceleration increase). Hence, there are no 'peaks' after the reaction time
             # threshold has been passed
+            NaNIdx = np.where(np.isnan(DF['invRT']))[0]
 
-            NaNIdxINVRT = np.where(np.isnan(DF['invRT']))[0]
-            NaNIdxMDA = np.where(np.isnan(DF['mda']))[0]
-            NaNIdxMDD = np.where(np.isnan(DF['mdd']))[0]
+            # (Change in) Acceleration
+            if self.constants['DELTA_A_COLUMN'] in DF.columns:  
+                DF['mda'] = DF[self.constants['DELTA_A_COLUMN']].astype(float)
+                # Mean center
+                DF['mda'] = DF['mda'] - DF['mda'].mean()
+                # Check for NaNs
+                NaNIdxMDA = np.where(np.isnan(DF['mda']))[0]
+                NaNIdx = np.hstack((NaNIdx, NaNIdxMDA))
+            # (Change in) Distance
+            if self.constants['DELTA_D_COLUMN'] in DF.columns:
+                DF['mdd'] = DF[self.constants['DELTA_D_COLUMN']].astype(float)
+                # Mean center
+                DF['mdd'] = DF['mdd'] - DF['mdd'].mean()
+                # Check for NaNs
+                NaNIdxMDD = np.where(np.isnan(DF['mdd']))[0]
+                NaNIdx = np.hstack((NaNIdx, NaNIdxMDD))
 
-            NaNIdx = np.unique(np.hstack((NaNIdxINVRT, NaNIdxMDA, NaNIdxMDD)))
+            NaNIdx = np.unique(NaNIdx)
 
             # Since the DF index does not necessarily correspond to the index found by 
             # np.where (since the DF index can be anything, while np.where returns the
@@ -2587,36 +2772,38 @@ class Analysis:
                 mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
 
             # (Change in) Acceleration
-            print('[INFO] Linear Mixed Model: (Change in) Acceleration')   
-            md = smf.mixedlm(formula = 'mda ~ is_pull * is_happy', data = DF, 
-                            groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
-                            re_formula='~is_pull * is_happy')
-            mdf = md.fit()
-            print(mdf.summary())
-            print('\n')
+            if self.constants['DELTA_A_COLUMN'] in DF.columns:  
+                print('[INFO] Linear Mixed Model: (Change in) Acceleration')   
+                md = smf.mixedlm(formula = 'mda ~ is_pull * is_happy', data = DF, 
+                                groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
+                                re_formula='~is_pull * is_happy')
+                mdf = md.fit()
+                print(mdf.summary())
+                print('\n')
 
-            models.update({'mda':md})
+                models.update({'mda':md})
 
-            if Save2CSV:
-                filename = 'LMM_Results_Acceleration.csv'
-                print('[INFO] Saving (acceleration) model results to file {}')
-                mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
+                if Save2CSV:
+                    filename = 'LMM_Results_Acceleration.csv'
+                    print('[INFO] Saving (acceleration) model results to file {}')
+                    mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
 
             # (Change in) Distance
-            print('[INFO] Linear Mixed Model: (Change in) Distance')   
-            md = smf.mixedlm(formula = 'mdd ~ is_pull * is_happy', data = DF, 
-                            groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
-                            re_formula='~is_pull * is_happy')
-            mdf = md.fit()
-            print(mdf.summary())
-            print('\n')
+            if self.constants['DELTA_D_COLUMN'] in DF.columns: 
+                print('[INFO] Linear Mixed Model: (Change in) Distance')   
+                md = smf.mixedlm(formula = 'mdd ~ is_pull * is_happy', data = DF, 
+                                groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
+                                re_formula='~is_pull * is_happy')
+                mdf = md.fit()
+                print(mdf.summary())
+                print('\n')
 
-            models.update({'mdd':md})
+                models.update({'mdd':md})
 
-            if Save2CSV:
-                filename = 'LMM_Results_Distance.csv'
-                print('[INFO] Saving (distance) model results to file {}')
-                mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
+                if Save2CSV:
+                    filename = 'LMM_Results_Distance.csv'
+                    print('[INFO] Saving (distance) model results to file {}')
+                    mdf.summary().tables[1].to_csv('{}\\{}'.format(SavePath, filename))
 
 
         else:
