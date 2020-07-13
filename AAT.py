@@ -2975,13 +2975,26 @@ class Analysis:
             iterations = UniquePIDs
 
         NumParticipants = len(UniquePIDs)
-        metrics = {'Acc' : [np.array(np.nan)]*NumParticipants, 
-                   'Dist' : [np.array(np.nan)]*NumParticipants, 
-                   'RT' : np.nan, 
-                   'DeltaA' : np.nan,
-                   'DeltaD' : np.nan}
+
+        # Add the two metrics which are always present
+        metrics = {'RT' : np.nan,
+                   'Acc' : [np.array(np.nan)]*NumParticipants}
+
+        # Add 'optional' metrics; parameters which can be optionally
+        # computed by the user
+        Distances = [self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], self.constants['DISTANCE_Z_COLUMN']]
+        if all(i in DF.columns for i in Distances):
+            metrics.update({'Dist' : [np.array(np.nan)]*NumParticipants})
+
+        if self.constants['DELTA_A_COLUMN'] in DF.columns:
+            metrics.update({'DeltaA' : np.nan})
+
+        if self.constants['DELTA_D_COLUMN'] in DF.columns:
+            metrics.update({'DeltaD' : np.nan})
+
         movements = ['Push', 'Pull']
 
+        # Generate overview columns
         Cols = {'PID' : ' ',
                 'time' : [np.array(np.nan)]*NumParticipants}
         for mov in movements:
@@ -3014,9 +3027,9 @@ class Analysis:
                 for mov in movements:
                     C_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Control)
                     T_Avg = self._AverageOverCondition(ParticipantData, UnifiedTime, mov, Target)
-                    for i, m in enumerate(metrics):
-                        Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[i]
-                        Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[i]
+                    for m in metrics:
+                        Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[m]
+                        Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[m]
             else:
                 Data.append(Cols.copy())
                 for col in Cols.keys():
@@ -3037,11 +3050,17 @@ class Analysis:
         condData = participantData.iloc[conditionIdx, :]
         N = len(condData)
 
+        distCols = [self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], self.constants['DISTANCE_Z_COLUMN']]
+        isDist = all(col in condData.columns for col in distCols)
+        isDeltaA = self.constants['DELTA_A_COLUMN']
+        isDeltaD = self.constants['DELTA_D_COLUMN']
+
         if N > 0:
             times = condData[self.constants['TIME_COLUMN']]
 
             Acc = np.zeros((3, N, len(unifiedTime)))
-            Dist = np.zeros((3, N, len(unifiedTime)))
+            if isDist:
+                Dist = np.zeros((3, N, len(unifiedTime)))
 
             for i in range(N):
                 startIdx = np.where(unifiedTime >= times[i][0])[0][0]
@@ -3053,30 +3072,46 @@ class Analysis:
                 Acc[1, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_Y_COLUMN']]
                 Acc[2, i, startIdx:endIdx] = iData[self.constants['ACCELERATION_COLUMN']]
 
-                Dist[0, i, startIdx:endIdx] = iData[self.constants['DISTANCE_X_COLUMN']]
-                Dist[1, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Y_COLUMN']]
-                Dist[2, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Z_COLUMN']]
+                if isDist:
+                    Dist[0, i, startIdx:endIdx] = iData[self.constants['DISTANCE_X_COLUMN']]
+                    Dist[1, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Y_COLUMN']]
+                    Dist[2, i, startIdx:endIdx] = iData[self.constants['DISTANCE_Z_COLUMN']]
 
             # Runtime warnings may appear due to this averaging, since there could instances where
             # we are averaging arrays of just nans. 
-            AvgAcc = np.nanmean(Acc, axis = 1)
-            AvgDist = np.nanmean(Dist, axis = 1)
-
             RTs = condData[self.constants['RT_COLUMN']]
-            AvgRT = np.nanmean(RTs.map(np.nanmean))
+            AvgRT = np.nanmean(RTs.to_numpy().astype(float))
 
-            DAs = condData[self.constants['DELTA_A_COLUMN']]
-            AvgDA = np.nanmean(DAs.map(np.nanmean))
+            AvgAcc = np.nanmean(Acc, axis = 1)
+            if isDist:
+                AvgDist = np.nanmean(Dist, axis = 1)
 
-            DDs = condData[self.constants['DELTA_D_COLUMN']]
-            AvgDD = np.nanmean(DDs.map(np.nanmean))
+            if isDeltaA:
+                DAs = condData[self.constants['DELTA_A_COLUMN']]
+                AvgDA = np.nanmean(DAs.to_numpy().astype(float))
+
+            if isDeltaD:
+                DDs = condData[self.constants['DELTA_D_COLUMN']]
+                AvgDD = np.nanmean(DDs.to_numpy().astype(float))
 
         # Some participants did not complete all conditions 
-        else:   
+        else:
+            AvgRT = np.nan   
             AvgAcc = np.nan
-            AvgDist = np.nan
-            AvgRT = np.nan
-            AvgDA = np.nan
-            AvgDD = np.nan
+            if isDist:
+                AvgDist = np.nan
+            if isDeltaA:
+                AvgDA = np.nan
+            if isDeltaD:
+                AvgDD = np.nan
 
-        return [AvgAcc, AvgDist, AvgRT, AvgDA, AvgDD]
+        Vals = {'RT':AvgRT,
+                'Acc':AvgAcc}
+        if isDist:
+            Vals.update({'Dist':AvgDist})
+        if isDeltaA:
+            Vals.update({'DeltaA':AvgDA})
+        if isDeltaD:
+            Vals.update({'DeltaD':AvgDD})
+
+        return Vals
