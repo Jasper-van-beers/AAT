@@ -2590,7 +2590,7 @@ class Analysis:
     # Output:   Stats = List of dataframes containing the general 
     #                   statistics for the reaction time, peak 
     #                   acceleration and peak distance 
-    def GeneralStats(self, DataFrame, Save2CSV = False, SavePath = None):
+    def GeneralStats(self, DataFrame, Save2CSV = False, SavePath = None, sgParams = None):
 
         def ComputeStats(header, col, Control, Target, PullIdx, PushIdx, ControlIdx, TargetIdx):
             x = DataFrame[col]
@@ -2626,6 +2626,23 @@ class Analysis:
             print('===============================================================')
             print('\n')
 
+            if sgParams is not None:
+                sgParams['OUTPUT'].print('\n')
+                sgParams['OUTPUT'].print('===============================================================')
+                sgParams['OUTPUT'].print('{} statistics'.format(header))
+                sgParams['OUTPUT'].print('===============================================================')
+                sgParams['OUTPUT'].print('Condition\t\t|\tMean\t\t|\tstd')
+                sgParams['OUTPUT'].print('Push\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PushIdx]), np.nanstd(x[PushIdx])))
+                sgParams['OUTPUT'].print('Pull\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PullIdx]), np.nanstd(x[PullIdx])))
+                sgParams['OUTPUT'].print('{}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx]), np.nanstd(x[ControlIdx])))
+                sgParams['OUTPUT'].print('{}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx]), np.nanstd(x[TargetIdx])))
+                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PushIdx]), np.nanstd(x[ControlIdx & PushIdx])))
+                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PullIdx]), np.nanstd(x[ControlIdx & PullIdx])))
+                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PushIdx]), np.nanstd(x[TargetIdx & PushIdx])))
+                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PullIdx]), np.nanstd(x[TargetIdx & PullIdx])))
+                sgParams['OUTPUT'].print('===============================================================')
+                sgParams['OUTPUT'].print('\n')
+
             return Tab
 
         # If no save path is provided, set it to the program folder
@@ -2642,24 +2659,32 @@ class Analysis:
         TargetIdx = (DataFrame[self.constants['STIMULUS_SET_COLUMN']]==Target)
         
         print('[INFO] GENERAL STATISTICS')
+        if sgParams is not None:
+            sgParams['OUTPUT'].print('[ INFO ] General statistics')
+
+        Stats = []
+
         RTStats = ComputeStats('Reaction time [ms]', self.constants['RT_COLUMN'], Control, Target, 
                               PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+        Stats.append(RTStats)
         if self.constants['DELTA_A_COLUMN'] in DataFrame.columns:  
             DAStats = ComputeStats('Peak acceleration [m/s^-2]', self.constants['DELTA_A_COLUMN'], Control, Target, 
                                 PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+            Stats.append(DAStats)
         if self.constants['DELTA_D_COLUMN'] in DataFrame.columns:  
             DDStats = ComputeStats('Peak displacement [m]', self.constants['DELTA_D_COLUMN'], Control, Target, 
                                 PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
+            Stats.append(DDStats)
         
         if Save2CSV:
             print('[INFO] Saving general statistics in directory: {}'.format(SavePath))
             
 
-        return [RTStats, DAStats, DDStats]
+        return Stats
 
 
 
-    def LinearMixedModels(self, DataFrame, Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False):
+    def LinearMixedModels(self, DataFrame, Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False, sgParams = None):
         ExpectedCols = [self.constants['STIMULUS_SET_COLUMN'], self.constants['CORRECT_RESPONSE_COLUMN'],
                         self.constants['RT_COLUMN'], self.constants['PARTICIPANT_COLUMN']]
 
@@ -2751,17 +2776,24 @@ class Analysis:
 
             print('\n[WARNING] Removing data from {} trials ({}% of total trials) due to missing information'.format(len(NaNIdx), len(NaNIdx)/len(DF.index)*100))
 
+            if sgParams is not None:
+                sgParams['OUTPUT'].print(f'[ INFO ] Removing data from {len(NaNIdx)} trials ({len(NaNIdx)/len(DF.index)*100}% of total trials) due to missing data', text_color = 'blue')
+
             DF = DF.iloc[BoolIdx]
 
             # Linear Mixed Models 
             # Reaction time
             print('\n')
             print('[INFO] Linear Mixed Model: Reaction Time (1/RT)')
+            if sgParams is not None:
+                sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: Reaction Time (1/RT)')
             md = smf.mixedlm(formula = 'invRT ~ is_pull * is_happy', data = DF, 
                             groups=DF['participant'].astype('category'), 
                             re_formula='~is_pull * is_happy')
             mdf = md.fit()
             print(mdf.summary())
+            if sgParams is not None:
+                sgParams['OUTPUT'].print(f'{mdf.summary()}')
             print('\n')
 
             models.update({'rt':md})
@@ -2773,12 +2805,16 @@ class Analysis:
 
             # (Change in) Acceleration
             if self.constants['DELTA_A_COLUMN'] in DF.columns:  
-                print('[INFO] Linear Mixed Model: (Change in) Acceleration')   
+                print('[INFO] Linear Mixed Model: (Change in) Acceleration')
+                if sgParams is not None:
+                    sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: (Peak) Acceleration')  
                 md = smf.mixedlm(formula = 'mda ~ is_pull * is_happy', data = DF, 
                                 groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
                                 re_formula='~is_pull * is_happy')
                 mdf = md.fit()
                 print(mdf.summary())
+                if sgParams is not None:
+                    sgParams['OUTPUT'].print(f'{mdf.summary()}')                
                 print('\n')
 
                 models.update({'mda':md})
@@ -2791,11 +2827,15 @@ class Analysis:
             # (Change in) Distance
             if self.constants['DELTA_D_COLUMN'] in DF.columns: 
                 print('[INFO] Linear Mixed Model: (Change in) Distance')   
+                if sgParams is not None:
+                    sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: (Peak) Distance')                
                 md = smf.mixedlm(formula = 'mdd ~ is_pull * is_happy', data = DF, 
                                 groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
                                 re_formula='~is_pull * is_happy')
                 mdf = md.fit()
                 print(mdf.summary())
+                if sgParams is not None:
+                    sgParams['OUTPUT'].print(f'{mdf.summary()}')                
                 print('\n')
 
                 models.update({'mdd':md})
@@ -2818,17 +2858,20 @@ class Analysis:
 
 
 
-    def RestructureAvgDF(self, AveragedDF):
+    def RestructureAvgDF(self, AveragedDF, sgParams = None):
 
-        def FillColData(PID, DF, Movement, Stimulus, Metrics = {'RT':self.constants['RT_COLUMN'], 'DeltaA':self.constants['DELTA_A_COLUMN'], 'DeltaD':self.constants['DELTA_D_COLUMN']}):
+        def FillColData(PID, DF, Movement, Stimulus, Metrics):
             row = {self.constants['PARTICIPANT_COLUMN']:PID,
                    self.constants['CORRECT_RESPONSE_COLUMN']:Movement,
                    self.constants['STIMULUS_SET_COLUMN']:Stimulus
                    }
 
             for metric in Metrics.keys():
-                col = '{} {} {}'.format(metric, Movement, Stimulus)
-                row.update({Metrics[metric]:DF.loc[PID, col]})
+                try:
+                    col = '{} {} {}'.format(metric, Movement, Stimulus)
+                    row.update({Metrics[metric]:DF.loc[PID, col]})
+                except KeyError:
+                    pass
 
             return row
 
@@ -2840,13 +2883,32 @@ class Analysis:
         else:
             indices = DF.index
 
+        if sgParams is not None:
+            sgParams['OUTPUT'].print('[ INFO ] Restructuring (within participant averaged) dataframe for LMM compatibility...')
+
+        metrics = {'RT':self.constants['RT_COLUMN'], 'DeltaA':self.constants['DELTA_A_COLUMN'], 'DeltaD':self.constants['DELTA_D_COLUMN']}
+
         RestructuredDF = []
 
-        for pid in indices:
-            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Control))
-            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Target))
-            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Control))
-            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Target))
+        execution_time = 0
+        sTime = time.time() 
+        for idx, pid in enumerate(indices):
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(idx+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(idx + 1, DF.shape[0])
+                timeRemainingS = execution_time/(idx + 1) * (DF.shape[0] - idx + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
+            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Control, metrics))
+            RestructuredDF.append(FillColData(pid, DF, 'Pull', self.Target, metrics))
+            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Control, metrics))
+            RestructuredDF.append(FillColData(pid, DF, 'Push', self.Target, metrics))
+
+            execution_time = time.time() - sTime
 
         RestructuredDF = pd.DataFrame(RestructuredDF)
 
@@ -2854,7 +2916,7 @@ class Analysis:
 
 
 
-    def AverageBetweenParticipant(self, DFWithinParticipant):
+    def AverageBetweenParticipant(self, DFWithinParticipant, sgParams = None):
         Control = self.Control
         Target = self.Target
         
@@ -2862,6 +2924,9 @@ class Analysis:
 
         if self.INFO:
             print('[INFO] Averaging results between participants')
+
+        if sgParams is not None:
+            sgParams['OUTPUT'].print('[ INFO ] Averaging results between participants...')
 
         try:
             _dummy = DF['Acc Pull {}'.format(Control)]
@@ -2900,7 +2965,21 @@ class Analysis:
         for idx, col in enumerate(DF.columns):
             FactorMap.update({col:(1/(N - MissingData[idx]))})
 
+        execution_time = 0
+        sTime = time.time()
         for pIdx, pid in enumerate(iterations):
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(pIdx+1)/DF.shape[0])))
+                sgParams['PROG_BAR'].UpdateBar(pIdx + 1, DF.shape[0])
+                timeRemainingS = execution_time/(pIdx + 1) * (DF.shape[0] - pIdx + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
             pData = DF.loc[pid, :]
             pTime = pData['time']
             try:
@@ -2952,6 +3031,8 @@ class Analysis:
 
                 data.update({col : newData})
 
+            execution_time = time.time() - sTime
+
 
         data.update({'PID' : 'Average'})
         AvgDF = pd.DataFrame(data=[data.values()], columns=data.keys())
@@ -2960,7 +3041,7 @@ class Analysis:
 
 
 
-    def AverageWithinParticipant(self, DataFrame):
+    def AverageWithinParticipant(self, DataFrame, sgParams = None):
         Control = self.Control
         Target = self.Target
 
@@ -2973,6 +3054,9 @@ class Analysis:
             iterations = tqdm(UniquePIDs)
         else:
             iterations = UniquePIDs
+
+        if sgParams is not None:
+            sgParams['OUTPUT'].print('[ INFO ] Averaging results within participants...')
 
         NumParticipants = len(UniquePIDs)
 
@@ -3004,7 +3088,22 @@ class Analysis:
 
         Data = []
 
+        execution_time = 0
+        sTime = time.time()
         for idx, pid in enumerate(iterations):
+            if sgParams:
+                # # Update progress bar, if user hits cancel, then break the iteration loop
+                # if not sg.OneLineProgressMeter('Filtering data...', i + 1, len(files), key='-IMPORT_PROGRESS-', orientation='h'):
+                #     break
+                sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(idx+1)/len(UniquePIDs))))
+                sgParams['PROG_BAR'].UpdateBar(idx + 1, len(UniquePIDs))
+                timeRemainingS = execution_time/(idx + 1) * (len(UniquePIDs) - idx + 1)
+                sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                events, values = sgParams['WINDOW'].read(timeout=1)
+                if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                    sgParams.update({'IS_CLOSED':True})
+                    break
+
             ParticipantData = DFByPID.loc[pid, :]
             N = len(ParticipantData)
             PracticeIdx = np.where(DFByPID.loc[pid, 'is_practice'])[0]
@@ -3035,6 +3134,8 @@ class Analysis:
                 for col in Cols.keys():
                     Data[-1][col] = np.nan
                 Data[-1]['PID'] = pid
+            
+            execution_time = time.time() - sTime
         
         OutDF = pd.DataFrame(Data)
 
@@ -3052,8 +3153,8 @@ class Analysis:
 
         distCols = [self.constants['DISTANCE_X_COLUMN'], self.constants['DISTANCE_Y_COLUMN'], self.constants['DISTANCE_Z_COLUMN']]
         isDist = all(col in condData.columns for col in distCols)
-        isDeltaA = self.constants['DELTA_A_COLUMN']
-        isDeltaD = self.constants['DELTA_D_COLUMN']
+        isDeltaA = self.constants['DELTA_A_COLUMN'] in condData.columns
+        isDeltaD = self.constants['DELTA_D_COLUMN'] in condData.columns
 
         if N > 0:
             times = condData[self.constants['TIME_COLUMN']]
