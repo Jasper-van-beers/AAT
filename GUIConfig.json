@@ -1,0 +1,67 @@
+{   
+    "UseConfig":true,
+    "Analysis Method" : "0",
+    "Processing Directories": {
+        "Raw Data Path":"Path\\to\\raw\\data\\folder",
+        "Conditions File Path":"Path\\to\\external\\data\\folder",
+        "Save File":true,
+        "Save Filename":"myProcessedAAT",
+        "Save Path":"Path\\to\\save\\folder",
+        "Save Condensed":true, 
+        "Save as .csv":true
+    },
+    "Import File Information": {
+        "File Path": "Path\\to\\AAT\\pkl\\file",
+        "Save File":false,
+        "Save Filename":"myProcessedAAT",
+        "Save Path":"Path\\to\\save\\folder",
+        "Save Condensed":true, 
+        "Save as .csv":true
+    },
+    "Default Processing Parameters": {
+        "Filtering Parameters": {
+            "Run":true,
+            "Minimum ratio of valid trials":"0.75",
+            "Reaction time cutoff":"200",
+            "Filter by reaction time":true, 
+            "Filter by acceleration":true,
+            "Correct for acceleration offset":true,
+            "Remove incorrect responses":true
+        },
+        "Reaction Time Parameters": {
+            "Run":true,
+            "Minimum acceleration for a reaction":"0.8",
+            "(Assumed) Peak height width":"10"
+        },
+        "Rotation Correction Parameters": {
+            "Run":true,
+            "Store Rotation Angles":false
+        },
+        "Distance Computation Parameters": {
+            "Run":true,
+            "Compute total distance magnitude":false
+        },
+        "Reaction Force and Distance Parameters": {
+            "Run":true,
+            "X (Vertical Axis)":false,
+            "Y (Lateral Axis)":false,
+            "Z (Ventral Axis)":true,
+            "Use absolute values":false,
+            "Compute reaction forces":true,
+            "Compute reaction distances":false
+        }
+    },
+    "Analysis Parameters": {
+        "Control":"control_group",
+        "Target":"target_group",
+        "Averaging Options": {
+            "Compute within participant averages":true,
+            "Restructure averaged data for LMM":false, 
+            "Compute between participant averages":true
+        },
+        "Statistics": {
+            "Compute means and standard deviations":true,
+            "Compute Linear Mixed Models":false
+        }
+    }
+}
