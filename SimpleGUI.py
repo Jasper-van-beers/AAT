@@ -119,7 +119,7 @@ def PreProcessFolder(Title, config = None):
               [sg.In(default_text=defaults['-COND_DATA_DIR-'], size=fieldEntrySize, key = '-COND_DATA_DIR-', enable_events=True), sg.FolderBrowse()],
               [sg.Text('')],
               [sg.Checkbox('Would you like to save the processed files?', key='-SAVE-', enable_events=True, default=defaults['-SAVE-'])],
-              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=not defaults['-SAVE-'], key = '-SAVE_BROWSE-')],
+              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=isDisabled, key = '-SAVE_BROWSE-')],
               [sg.Text('Save filename:', text_color=bColors[int(defaults['-SAVE-'])], key='-SF_TEXT-'), sg.InputText(default_text=defaults['-SAVE_FILENAME-'], size=(50, 1), key='-SAVE_FILENAME-', disabled = not defaults['-SAVE-'], text_color=tColors[int(defaults['-SAVE-'])])],
               [sg.Checkbox('Save condensed data', key='-SMALLSAVE-', enable_events = True, default=defaults['-SMALLSAVE-'], disabled=not defaults['-SAVE-']),
                sg.Checkbox('Save as .csv', key='-SAVECSV-', enable_events = True, default=defaults['-SAVECSV-']*defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-'])],
@@ -425,6 +425,8 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None, ForAnalysis 
 
     ForceFunctionSelection = False
 
+    oldOrder = []
+
     if ImportFilePath is not None:
         MetaDataFilePath = ImportFilePath[:-4] + '_metadata.json'
         ForceFunctionSelection = True
@@ -432,6 +434,7 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None, ForAnalysis 
             with open(MetaDataFilePath, 'r') as f:
                 ImportParams = json.loads(f.read())
             PermaDisabled, DefaultRun = MapExisitingOrder(ImportParams['TagList'])
+            oldOrder = ImportParams['TagList']
         else:
 
             PermaDisabled = {'FILT':False, 'RT':False, 'ROTCORRECT':False, 'DISTANCE':False, 'RFRD':False}
@@ -625,6 +628,7 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None, ForAnalysis 
         which = ['acceleration', 'distance']
         which = [which[i] for i, val in enumerate([value['-RF-'], value['-RD-']]) if val]
         value.update({'which':which})
+        value.update({'OldTagList':oldOrder})
 
     if cancelled:
         value = None
@@ -963,15 +967,17 @@ def RunPreprocessing(Title, Params, Files, SavePath, SaveParams = None):
         findingName = True
         fname = Filename
         while findingName:
-            if not os.path.isfile(os.path.join(SavePath, '{}.pkl'.format(fname))) or not os.path.isfile(os.path.join(SavePath, '{}.csv'.format(fname))):
+            if not os.path.isfile(os.path.join(SavePath, '{}.pkl'.format(fname))) and not os.path.isfile(os.path.join(SavePath, '{}.csv'.format(fname))):
                 findingName = False
             else:
                 fname = Filename + '_{}'.format(counter)
             counter += 1
 
-        return Filename
+        return fname
 
     def SaveMetaData(filename, filetype, savepath, order, params):
+        if 'OldTagList' in params.keys():
+            order = params['OldTagList'] + order
         MetaData = {'TagList':order, 'Tag':order[-1], 'FileType':filetype, 'Params':params}
 
         with open(os.path.join(savepath, filename), 'w') as f:
@@ -1049,6 +1055,7 @@ def RunPreprocessing(Title, Params, Files, SavePath, SaveParams = None):
                         CondensedData = DataImporter.CondenseDF(Data, sgParams = sgParams)
         
                 Filename = CheckFile(SaveParams['-SAVE_FILENAME-'], SavePath)
+                # window['-OUTPUT-'].print('[ INFO ] Filename: {}'.format(Filename))
                 window['-OUTPUT-'].print('[ INFO ] Saving processed file to {}, this may take a while and the program may (briefly) appear to be not responding. This is normal, please wait...'.format(SavePath))
                 window.refresh()
                 MetaDataFile = '{}_metadata.json'.format(Filename)
@@ -1079,13 +1086,13 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
         findingName = True
         fname = Filename
         while findingName:
-            if not os.path.isfile(os.path.join(SavePath, '{}.pkl'.format(fname))) or not os.path.isfile(os.path.join(SavePath, '{}.csv'.format(fname))) or not os.path.isfile(os.path.join(SavePath, '{}.xlsx'.format(fname))):
+            if not os.path.isfile(os.path.join(SavePath, '{}.pkl'.format(fname))) and not os.path.isfile(os.path.join(SavePath, '{}.csv'.format(fname))) and not os.path.isfile(os.path.join(SavePath, '{}.xlsx'.format(fname))):
                 findingName = False
             else:
                 fname = Filename + '_{}'.format(counter)
             counter += 1
 
-        return Filename
+        return fname
 
 
     def Process(funcLabel, data, SaveParams, sgParams, returnData = False):
@@ -1242,7 +1249,7 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
 
             if SaveParams['-SAVE-']:
                 SaveMapping(Params['Mapping'], SaveParams)
-                    
+
             window['-OUTPUT-'].print('[ INFO ] Applying stimulus set mapping...')
             Data = Analysis.FuseStimulusSets(Data, Params['Mapping'], sgParams = sgParams)
             window.refresh()
@@ -1289,8 +1296,6 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
 
 Title = 'AAT Analysis'
 
-# Get config file, and determine if it should be used
-# TODO: Input validation for config file -> Prompt error and run with config = None. 
 configPath = os.path.join(os.getcwd(), 'GUIConfig.json')
 if os.path.isfile(configPath):
     with open(configPath, 'r', encoding = 'utf-8') as f:
@@ -1317,7 +1322,7 @@ if RunAll is not None:
             if UserInputs:
                 Data = RunPreprocessing(Title, UserInputs, [RawDataPath, CondDataPath], PreSavePath, SaveParams=PreFolderPaths)
                 if RunAll == 0:
-                    AnalysisInputs = AnalysisParams(Title, Data, config=configFile, ImportFilePath = PreFolderPaths['Processed_FilePath'])
+                    AnalysisInputs = AnalysisParams(Title, Data, config=configFile, ImportFilePath=PreFolderPaths['Processed_FilePath'])
                     if AnalysisInputs:
                         RunAnalysis(Title, Data, AnalysisInputs, SaveParams=PreFolderPaths)
             else: 
