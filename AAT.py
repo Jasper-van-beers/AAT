@@ -79,7 +79,8 @@ class DataImporter:
                         'DISTANCE_Z_COLUMN' : 'distance_z',
                         'TOTAL_DISTANCE_COLUMN' : 'total_distance',
                         'DELTA_A_COLUMN': 'da',
-                        'DELTA_D_COLUMN': 'dd'}
+                        'DELTA_D_COLUMN': 'dd',
+                        '_globalTrials': '_globalTrials'}
         standard_cols = ['PARTICIPANT_COLUMN', 'DEVICE_COLUMN', 
                         'EXPERIMENT_COLUMN', 'CONDITION_COLUMN', 
                         'SIGNED_UP_COLUMN', 'SESSION_COLUMN']
@@ -128,6 +129,15 @@ class DataImporter:
                         'gyro_y':'GYRO_Y_COLUMN',
                         'gyro_z':'GYRO_Z_COLUMN'}
 
+        self.CondensedCols = [self.constants['PARTICIPANT_COLUMN'],
+                                    self.constants['STIMULUS_SET_COLUMN'],
+                                    self.constants['CORRECT_RESPONSE_COLUMN'],
+                                    self.constants['STIMULUS_COLUMN'],
+                                    self.constants['CONDITION_COLUMN'],
+                                    self.constants['SESSION_COLUMN'],
+                                    self.constants['BLOCK_COLUMN'],
+                                    self.constants['TRIAL_NUMBER_CUM_COLUMN']]
+
 
     # Basic utility function to check if specified files are found in the specified directory
     # Input:    files = list of strings containing the filenames to check
@@ -171,11 +181,34 @@ class DataImporter:
 
 
 
-    # TODO: Utility function to rename columns of the columns of the dataframe and modify
-    # the appropriate global class constants
-    def RenameDFCols(self):
-        # Add something to rename acceleration column to acceleration_z
-        pass
+    def CondenseDF(self, DataFrame, sgParams = None):
+        DF = DataFrame.copy(deep = True)
+        if all(col in DF.columns for col in self.CondensedCols):
+            try:
+                Mapper = {self.constants['RT_COLUMN']:"Reaction Time"}
+                self.CondensedCols.append(self.constants['RT_COLUMN'])
+                if self.constants['DELTA_A_COLUMN'] in DF.columns:
+                    Mapper.update({self.constants['DELTA_A_COLUMN']:"Reaction Force"})
+                    self.CondensedCols.append(self.constants['DELTA_A_COLUMN'])
+                if self.constants['DELTA_D_COLUMN'] in DF.columns:
+                    Mapper.update({self.constants['DELTA_D_COLUMN']:"Reaction Distance"})
+                    self.CondensedCols.append(self.constants['DELTA_D_COLUMN'])
+                DF = DF[self.CondensedCols]
+                # Rename the reaction time, reaction force and reaction distance columns to be
+                # for those using the GUI, such that the output data is easier to interpret. 
+                if sgParams is not None:
+                    DF = DF.rename(columns = Mapper)
+            except KeyError:
+                if sgParams is not None:
+                    sgParams['OUTPUT'].print('[ WARNING ] Cannot condense columns since the Reaction Time column is missing.', text_color = 'red')
+                if self.INFO:
+                    print('[ WARNING ] Cannot condense columns since the expected columns do not exist.')
+        else:
+            if self.INFO:
+                print('[ WARNING ] Cannot condense columns since the expected columns do not exist.')
+            if sgParams is not None:
+                sgParams['OUTPUT'].print('[ WARNING ] Cannot condense columns since the expected columns do not exist. Defaulting to standard DF.', text_color = 'red')
+        return DF
 
     
     # Function to compute the peak accelerations and distances following a reaction
@@ -822,8 +855,8 @@ class DataImporter:
             # falsely identified as having too fast reaction times, we will consider any peak larger than RTHeighThresRatio of the highest 
             # peak as a significant peak. However, there are also participants with no reactions, in which case we take the absolute 
             # lowerbound, defined by RTResLB. 
-            # RTHeightThres = max(max(abs(row[self.constants['ACCELERATION_COLUMN']]))*RTHeightThresRatio, RTResLB)
-            RTHeightThres = RTResLB
+            RTHeightThres = max(max(abs(row[self.constants['ACCELERATION_COLUMN']]))*RTHeightThresRatio, RTResLB)
+            # RTHeightThres = RTResLB
             # The try-except catch below is to account for no reactions (which may not exceed the reaction threshold)
             try:
                 # Find the first index where the acceleration exceeds this threshold
@@ -973,6 +1006,23 @@ class DataImporter:
         return DataRow, stds
 
 
+    
+    def _HasCorrectResponse(self, DataRow):
+        Map = {'Pull':1, 'Push':-1}
+        Acc = DataRow[self.constants['ACCELERATION_COLUMN']]
+        rt = DataRow[self.constants['RT_COLUMN']]
+        try:
+            rt_idx = np.where(DataRow[self.constants['TIME_COLUMN']] > rt)[0][0]
+            # Logic: If sign is positive, then the response was correct.
+            # If pull then Acc is positive, so positive x positive = positive
+            # If push then Acc is negative, so negative x negative = positive
+            # Positive x Negative = Negative 
+            cond = Acc[rt_idx] * Map[DataRow[self.constants['CORRECT_RESPONSE_COLUMN']]] > 0
+        except TypeError:
+            cond = False
+        return cond
+
+
 
     # Function to determine if the acceleration data is realistic. Here, an approximation is made on the 
     # average acceleration needed to fully extend a human arm in the timeframe (~2 seconds). This is itself 
@@ -994,7 +1044,11 @@ class DataImporter:
     #                       tolerance relaxes the cutoff for realistic accelerations
     # Output:   AccIsRealistic = Boolean, True if acceleration is considered realistic, False otherwise
     def _HasRealisticAccelerations(self, DataRow, MaxArmDist, TimeScale = 1000, Tolerance = 0.50):
-        MaxDist = MaxArmDist[DataRow['gender']]
+        try:
+            MaxDist = MaxArmDist[DataRow['gender']]
+        except KeyError:
+            # Assume worst case; males have longer arms in general
+            MaxDist = MaxArmDist['male']
         # Add catch for any missing data (i.e. np.nans)
         try:
             # Get time window
@@ -1053,7 +1107,7 @@ class DataImporter:
     #                        average reasonable acceleration)
     # Outputs:  DF = Filtered dataframe
     #           Removed_data = Dataframe containing the removed data
-    def FilterData(self, Data, MinDataRatio = 0.8, RemoveRT = True, KeepNoRT = False, RTThreshold = 200, CalibrateAcc = True, RemoveAcc = True, MaxArmDist = {'female':0.735, 'male':0.810}, sgParams = None):
+    def FilterData(self, Data, RemoveIncorrectResponses = True, MinDataRatio = 0.8, RemoveRT = True, KeepNoRT = False, RTThreshold = 200, CalibrateAcc = True, RemoveAcc = True, MaxArmDist = {'female':0.735, 'male':0.810}, sgParams = None):
         # Make a copy of the data frame (such that we do not make changes to the input data frame directly)
         DF = Data.copy(deep = True)
 
@@ -1084,6 +1138,7 @@ class DataImporter:
         Indices_to_remove_RT = []
         Indices_to_remove_Acc = []
         NoReaction_idx = []
+        Indices_to_remove_IncorrectRes = []
         # Lists to store sensor attributed (noise and offset corrections), to be converted to dataframes later
         AccelerationNoiseList = []
         GyroNoiseList = []
@@ -1129,6 +1184,13 @@ class DataImporter:
                 if not _HasRealisticRT and i not in NoReaction_idx:
                     Indices_to_remove_RT.append(i)
 
+            # Remove participants with incorrect reactions
+            if RemoveIncorrectResponses:
+                # Check if the response is correct or not
+                IsCorrect = self._HasCorrectResponse(row)
+                if not IsCorrect and i not in Indices_to_remove_RT:
+                    Indices_to_remove_IncorrectRes.append(i)
+
             # Correct accelerations for offsets and extract noise characteristics
             if CalibrateAcc:
                 # Avoid calibrations if not needed (i.e. Indices are already scheduled for removal)
@@ -1153,9 +1215,9 @@ class DataImporter:
         # Combine the indices to remove (and skip repeated indices)
         # If user opted to keep no reaction data (e.g. for computing more sensor noise characteristics)
         if KeepNoRT:
-            Indices_to_remove = np.unique(Indices_to_remove_RT + Indices_to_remove_Acc)
+            Indices_to_remove = np.unique(Indices_to_remove_RT + Indices_to_remove_Acc + Indices_to_remove_IncorrectRes)
         else:
-            Indices_to_remove = np.unique(Indices_to_remove_RT + Indices_to_remove_Acc + NoReaction_idx)
+            Indices_to_remove = np.unique(Indices_to_remove_RT + Indices_to_remove_Acc + Indices_to_remove_IncorrectRes + NoReaction_idx)
 
         # If accelerations are calibrated, then add necessary columns to dataframe and replace
         # existing acceleraiton columns
@@ -1172,7 +1234,7 @@ class DataImporter:
         for i in range(len(ParticipantIDX) - 1):
             PIdxRange = ParticipantIDX[i+1] - ParticipantIDX[i]
             InvalidIDX = np.where((np.array(Indices_to_remove) >= ParticipantIDX[i]) & (np.array(Indices_to_remove) <= ParticipantIDX[i+1]))[0]
-            if (len(InvalidIDX)/PIdxRange) >= MinDataRatio and len(InvalidIDX) > 0:
+            if (len(InvalidIDX)/PIdxRange) >= (1 - MinDataRatio) and len(InvalidIDX) > 0:
                 # Store participant ID. We cannot remove them now otherwise the Indices_to_remove would not
                 # correspond to the dataframe, DF, anymore. 
                 RemoveIdx = np.where(DF[self.constants['PARTICIPANT_COLUMN']].str.contains(DF.loc[ParticipantIDX[i], self.constants['PARTICIPANT_COLUMN']]))[0]
@@ -1194,6 +1256,8 @@ class DataImporter:
                 print('[INFO] \t Percentage of data with No Reaction: {}'.format(len(NoReaction_idx)/N*100))
             if RemoveAcc:
                 print('[INFO] \t Percentage of data with implausible accelerations: {}'.format(len(Indices_to_remove_Acc)/N*100))
+            if RemoveIncorrectResponses:
+                print('[INFO] \t Percentage of data with incorrect responses: {}'.format(len(Indices_to_remove_IncorrectRes)/N*100))
             print('[INFO] Total percentage of data removed due to not enough valid data: {}'.format(NumRemoveInvalid/N*100))
             print('[INFO] Total percentage of data filetered (Keep No Reactions = {}): {}'.format(KeepNoRT, len(Indices_to_remove)/N*100))
 
@@ -1201,11 +1265,13 @@ class DataImporter:
             sgParams['OUTPUT'].print('[ INFO ] Filtering results:')
             if RemoveRT:
                 sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with implausible (<{} ms) reaction times: {:3f}'.format(RTThreshold, float(len(Indices_to_remove_RT)/N*100)), text_color = 'blue')
-                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with No Reaction: {}'.format(len(NoReaction_idx)/N*100), text_color = 'blue')
+                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with No Reaction: {}'.format(float(len(NoReaction_idx)/N*100)), text_color = 'blue')
             if RemoveAcc:
                 sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with implausible accelerations: {:3f}'.format(float(len(Indices_to_remove_Acc)/N*100)), text_color = 'blue')
-            sgParams['OUTPUT'].print('[ INFO ] Total percentage of data removed due to not enough valid data: {:3f}'.format(float(NumRemoveInvalid/N*100)), text_color = 'blue')
-            sgParams['OUTPUT'].print('[ INFO ] Total percentage of data filetered (Keep No Reactions = {}): {:3f}'.format(KeepNoRT, float(len(Indices_to_remove)/N*100)), text_color = 'blue')
+            if RemoveIncorrectResponses:
+                sgParams['OUTPUT'].print('[ INFO ] \t Percentage of data with incorrect responses: {}'.format(float(len(Indices_to_remove_IncorrectRes)/N*100)), text_color = 'blue')
+            sgParams['OUTPUT'].print('[ INFO ] \t Total percentage of data removed due to not enough valid data: {:3f}'.format(float(NumRemoveInvalid/N*100)), text_color = 'blue')
+            sgParams['OUTPUT'].print('[ INFO ] \t Total percentage of data filetered (Keep No Reactions = {}): {:3f}'.format(KeepNoRT, float(len(Indices_to_remove)/N*100)), text_color = 'blue')
  
         
         # Remove data from dataframe
@@ -1270,23 +1336,35 @@ class DataImporter:
                     # Order by participant ID, Session, Block and Trial
                     self._CondTable = self._CondTable.reset_index().set_index(['participant', 'session', 'block', 'trial'])
                     
-                    # After the second block of practice trials, the condition (e.g. Pull X) switchs (in this 
-                    # case, to Push X). However, this is not explicitly recorded in the Java files. This switch
-                    # can also be seen through the change in the 'correct response' (in this case, from pull to 
-                    # push). However, we will identify the location of the switch the column 'is practice'
-                    # Find where the word 'practice' does not occur
-                    exp_trial_idx = np.where(self._CondTable['is_practice'])[0]
-                    # Check for break in indices which contain the 'practice' images 
-                    cond_switch = np.where([(exp_trial_idx[i] + 1) != exp_trial_idx[i + 1] for i in range(len(exp_trial_idx)-1)])[0]
-                    idx_switch = exp_trial_idx[cond_switch + 1][0]
-                    # Infer new instruction
-                    instructions = ['push', 'pull']
-                    ori_instruction = self._CondTable['condition'][0][0:4]
-                    new_instruction = instructions[np.where(instructions != np.array(ori_instruction))[0][0]]
-                    # Correct condition for instruction switch
-                    self._CondTable.at[idx_switch:, 'condition'] = '{}{}'.format(new_instruction, self._CondTable['condition'][0][4:])
-    
+                    # # After the second block of practice trials, the condition (e.g. Pull X) switchs (in this 
+                    # # case, to Push X). However, this is not explicitly recorded in the Java files. This switch
+                    # # can also be seen through the change in the 'correct response' (in this case, from pull to 
+                    # # push). However, we will identify the location of the switch the column 'is practice'
+                    # # Find where the word 'practice' does not occur
+                    # exp_trial_idx = np.where(self._CondTable['is_practice'])[0]
+                    # # Check for break in indices which contain the 'practice' images 
+                    # cond_switch = np.where([(exp_trial_idx[i] + 1) != exp_trial_idx[i + 1] for i in range(len(exp_trial_idx)-1)])[0]
+                    # idx_switch = exp_trial_idx[cond_switch + 1][0]
+                    # # Infer new instruction
+                    # instructions = ['push', 'pull']
+                    # ori_instruction = self._CondTable['condition'][0][0:4]
+                    # new_instruction = instructions[np.where(instructions != np.array(ori_instruction))[0][0]]
+                    # # Correct condition for instruction switch
+                    # self._CondTable.at[idx_switch:, 'condition'] = '{}{}'.format(new_instruction, self._CondTable['condition'][0][4:])
+
                     self._CondTable[self._CatQCols] = self._CondTable[self._CatQCols].astype('category')
+                    # Rename question_id to question_label
+                    for jsonKey in self._qkeys:
+                        questionFields = self._participant_file[jsonKey]
+                        for qf in questionFields.keys():
+                            questions = self.tasks[qf]['questions']
+                            for q in questions:
+                                try:
+                                    self._CondTable.rename(columns = {q['id']:q['label']}, inplace=True)
+                                except KeyError:
+                                    pass
+
+
                     self._Data.append(self._CondTable)
             execution_time = time.time() - sTime
         # Create pandas DataFrame from data
@@ -1320,7 +1398,7 @@ class DataImporter:
     def _LoadParticipantData(self):
         # Get the relevant condition table to fill in
         self._CondTable = self._GetCondTable(self._condition)
-
+        self._qkeys = []
         # Loop through the keys in the participant json file. If the keys match the 
         # (assosicated Json keys in) ExpectedParticipantData, then we fill in the 
         # corresponding column in the Condition table.
@@ -1350,77 +1428,143 @@ class DataImporter:
                     if task == 'AAT':
                         # Start iterable at 1 (There is no block '0')
                         for block_idx, block in enumerate(self._SessionDict[task]['blocks'], 1):
-                            # First entry in each block is 'null', so we ignore the first entry (hence block[1:]). 
+                            # First entry in each block is 'null', so we ignore the first entry (hence block[1:]).
                             for trial_idx, trial in enumerate(block[1:], 1):
                                 # Create an index which contains the session name (in this case, jsonKey, which is 
                                 # something like push_x_session), the block number, and the trial number.
-                                idx = (jsonKey, block_idx, trial_idx)
-                                # Look up idx combination in condition table, if it exists fill in relevant data
-                                if idx in self._CondTable.index:
-                                    # Store block-trial level data (e.g. Correct response for Push_X session, Image used etc.)
-                                    for key in self.ExpectedBlockData.keys():
-                                        # Try store necessary data
+                                if self._hasBlocksJson:
+                                    for Stimkey in self.globalSwitchTrials[self._condition][jsonKey].keys():
+                                        glob_trial_idx = self.globalSwitchTrials[self._condition][jsonKey][Stimkey]
+                                        idx = (jsonKey, block_idx, trial_idx, glob_trial_idx + trial_idx - 1)
+                                        # Look up idx combination in condition table, if it exists fill in relevant data
+                                        if idx in self._CondTable.index:
+                                            # Store block-trial level data (e.g. Correct response for Push_X session, Image used etc.)
+                                            for key in self.ExpectedBlockData.keys():
+                                                # Try store necessary data
+                                                try:
+                                                    self._CondTable.at[idx, self.constants[key]] = trial[self.ExpectedBlockData[key]]
+                                                # If it does not exists, fill in blank.
+                                                except:
+                                                    self._CondTable.at[idx, self.constants[key]] = np.nan
+                                            # Store data which requires special handling or additional processing
+                                            # Extract the image stimulus set (e.g. Happy_04 belongs to Happy set), if it exists 
+                                            try:
+                                                self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = self.INV_stimulus_sets[trial[self.ExpectedBlockData['STIMULUS_COLUMN']]]
+                                            except:
+                                                self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = np.nan
+
+                                            # Preallocate arrays, sizes of arrays are unknown until data is imported. 
+                                            acc_times = np.array([])
+                                            gyro_times = np.array([])
+                                            
+                                            # Extract numeric AAT trial data (e.g. acceleration, time etc.)
+                                            for key, value in self.ExpectedNumericData.items():
+                                                # Check if expected data is present 
+                                                if value in trial.keys():
+                                                    # Create dataframe row to hold data from .json file
+                                                    val = pd.Series(trial[self.ExpectedNumericData[key]])
+                                                    # The indices correspond to the time, in milliseconds
+                                                    # In the .json file, these are stored as strings so we need to 
+                                                    # converthem into integers
+                                                    val.index = val.index.astype('int')
+                                                    # The time values are also stored arbitrarily, so we need to 
+                                                    # sort the time values to obtain a time-continuous signal
+                                                    val = val.sort_index()
+                                                    # The time arrays for acceleration and gyroscopic data are not
+                                                    # the same. So we need to store them separately. There is also
+                                                    # no 'time' key in the .json file. The times are rather given 
+                                                    # alongside the acceleration/gyroscopic data. 
+                                                    if (key.startswith('acceleration')) & (len(acc_times) == 0):
+                                                        acc_times = val.index.values
+                                                        self._CondTable.at[idx, self.constants['TIME_COLUMN']] = acc_times
+                                                    elif (key.startswith('gyro')) & (len(gyro_times) == 0):
+                                                        gyro_times = val.index.values
+                                                        self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = gyro_times
+                                                    # Store acceleration/gyroscopic data based on the key (e.g. acceleration_x will
+                                                    # be stored under the acceleration_x column)
+                                                    val = val.values
+                                                    self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = val
+                                                else:
+                                                    # If data is missing, store as empty numpy arrays. 
+                                                    if len(acc_times) == 0:
+                                                        self._CondTable.at[idx, self.constants['TIME_COLUMN']] = np.nan
+                                                    elif len(gyro_times) == 0:
+                                                        self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = np.nan
+                                                    self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = np.nan
+                                            
+                                else:
+                                    idx = (jsonKey, block_idx, trial_idx)
+                                    # Look up idx combination in condition table, if it exists fill in relevant data
+                                    if idx in self._CondTable.index:
+                                        # Store block-trial level data (e.g. Correct response for Push_X session, Image used etc.)
+                                        for key in self.ExpectedBlockData.keys():
+                                            # Try store necessary data
+                                            try:
+                                                self._CondTable.at[idx, self.constants[key]] = trial[self.ExpectedBlockData[key]]
+                                            # If it does not exists, fill in blank.
+                                            except:
+                                                self._CondTable.at[idx, self.constants[key]] = np.nan
+                                        # Store data which requires special handling or additional processing
+                                        # Extract the image stimulus set (e.g. Happy_04 belongs to Happy set), if it exists 
                                         try:
-                                            self._CondTable.at[idx, self.constants[key]] = trial[self.ExpectedBlockData[key]]
-                                        # If it does not exists, fill in blank.
+                                            self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = self.INV_stimulus_sets[trial[self.ExpectedBlockData['STIMULUS_COLUMN']]]
                                         except:
-                                            self._CondTable.at[idx, self.constants[key]] = np.nan
-                                    # Store data which requires special handling or additional processing
-                                    # Extract the image stimulus set (e.g. Happy_04 belongs to Happy set), if it exists 
-                                    try:
-                                        self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = self.INV_stimulus_sets[trial[self.ExpectedBlockData['STIMULUS_COLUMN']]]
-                                    except:
-                                        self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = np.nan
+                                            self._CondTable.at[idx, self.constants['STIMULUS_SET_COLUMN']] = np.nan
 
-                                    # Preallocate arrays, sizes of arrays are unknown until data is imported. 
-                                    acc_times = np.array([])
-                                    gyro_times = np.array([])
+                                        # Preallocate arrays, sizes of arrays are unknown until data is imported. 
+                                        acc_times = np.array([])
+                                        gyro_times = np.array([])
 
-                                    # Extract numeric AAT trial data (e.g. acceleration, time etc.)
-                                    for key, value in self.ExpectedNumericData.items():
-                                        # Check if expected data is present 
-                                        if value in trial.keys():
-                                            # Create dataframe row to hold data from .json file
-                                            val = pd.Series(trial[self.ExpectedNumericData[key]])
-                                            # The indices correspond to the time, in milliseconds
-                                            # In the .json file, these are stored as strings so we need to 
-                                            # converthem into integers
-                                            val.index = val.index.astype('int')
-                                            # The time values are also stored arbitrarily, so we need to 
-                                            # sort the time values to obtain a time-continuous signal
-                                            val = val.sort_index()
-                                            # The time arrays for acceleration and gyroscopic data are not
-                                            # the same. So we need to store them separately. There is also
-                                            # no 'time' key in the .json file. The times are rather given 
-                                            # alongside the acceleration/gyroscopic data. 
-                                            if (key.startswith('acceleration')) & (len(acc_times) == 0):
-                                                acc_times = val.index.values
-                                                self._CondTable.at[idx, self.constants['TIME_COLUMN']] = acc_times
-                                            elif (key.startswith('gyro')) & (len(gyro_times) == 0):
-                                                gyro_times = val.index.values
-                                                self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = gyro_times
-                                            # Store acceleration/gyroscopic data based on the key (e.g. acceleration_x will
-                                            # be stored under the acceleration_x column)
-                                            val = val.values
-                                            self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = val
-                                        else:
-                                            # If data is missing, store as empty numpy arrays. 
-                                            if len(acc_times) == 0:
-                                                self._CondTable.at[idx, self.constants['TIME_COLUMN']] = np.nan
-                                            elif len(gyro_times) == 0:
-                                                self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = np.nan
-                                            self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = np.nan
-                    # If not an AAT session, then the session is likely a questionaire type. 
+                                        # Extract numeric AAT trial data (e.g. acceleration, time etc.)
+                                        for key, value in self.ExpectedNumericData.items():
+                                            # Check if expected data is present 
+                                            if value in trial.keys():
+                                                # Create dataframe row to hold data from .json file
+                                                val = pd.Series(trial[self.ExpectedNumericData[key]])
+                                                # The indices correspond to the time, in milliseconds
+                                                # In the .json file, these are stored as strings so we need to 
+                                                # converthem into integers
+                                                val.index = val.index.astype('int')
+                                                # The time values are also stored arbitrarily, so we need to 
+                                                # sort the time values to obtain a time-continuous signal
+                                                val = val.sort_index()
+                                                # The time arrays for acceleration and gyroscopic data are not
+                                                # the same. So we need to store them separately. There is also
+                                                # no 'time' key in the .json file. The times are rather given 
+                                                # alongside the acceleration/gyroscopic data. 
+                                                if (key.startswith('acceleration')) & (len(acc_times) == 0):
+                                                    acc_times = val.index.values
+                                                    self._CondTable.at[idx, self.constants['TIME_COLUMN']] = acc_times
+                                                elif (key.startswith('gyro')) & (len(gyro_times) == 0):
+                                                    gyro_times = val.index.values
+                                                    self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = gyro_times
+                                                # Store acceleration/gyroscopic data based on the key (e.g. acceleration_x will
+                                                # be stored under the acceleration_x column)
+                                                val = val.values
+                                                self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = val
+                                            else:
+                                                # If data is missing, store as empty numpy arrays. 
+                                                if len(acc_times) == 0:
+                                                    self._CondTable.at[idx, self.constants['TIME_COLUMN']] = np.nan
+                                                elif len(gyro_times) == 0:
+                                                    self._CondTable.at[idx, self.constants['GYRO_TIME_COLUMN']] = np.nan
+                                                self._CondTable.at[idx, self.constants[self.ExpectedNumericData2Constants[key]]] = np.nan
+                        # If not an AAT session, then the session is likely a questionaire type. 
                     else:
                         # _QuestionsDict is a dictionary of the questions asked in a particular session
                         # For example, in 'DG' (demographics) has keys (questions) of 'age' and 'gender'
                         self._QuestionsDict = self._SessionDict[task]
+                        self._qkeys.append(jsonKey)
                         for Qkey in self._QuestionsDict.keys():
-                            # Note: .loc sets entire row/column to a value 
-                            self._CondTable.loc[jsonKey, Qkey] = self._QuestionsDict[Qkey]['answer']
+                            # Note: .loc sets entire row/column to a value
+                            if self._hasBlocksJson:
+                                self._CondTable.loc[:, Qkey] = self._QuestionsDict[Qkey]['answer']
+                            else:
+                                self._CondTable.loc[jsonKey, Qkey] =  self._QuestionsDict[Qkey]['answer']
+
 
         # Convert values for "correct response" from 1 and 2 to push and pull respectively 
-        self._CondTable[self.constants['CORRECT_RESPONSE_COLUMN']].replace({1:'Push',2:'Pull'}, inplace=True)            
+        self._CondTable[self.constants['CORRECT_RESPONSE_COLUMN']].replace({1:'Push',2:'Pull'}, inplace=True)
         
         return self._CondTable
 
@@ -1486,6 +1630,14 @@ class DataImporter:
         # stimulus_sets.json contains the names of each stimulus set, along with the names of the images used in each set
         # e.g. Stimulus Happy contians Happy_01, Happy_02, ..., Happy_NN
         self.stimulus_sets = self._LoadJson(os.path.join(cond_path, "stimulus_sets.json"))
+        # blocks.json contains a summary of the blocks used in the AAT paradigm
+        try:
+            self._blocks = self._LoadJson(os.path.join(cond_path, "blocks.json"))
+            self._hasBlocksJson = True
+            self.globalSwitchTrials = {}
+        except AttributeError:
+            self._hasBlocksJson = False
+            pass
         # Invert the stimulus set such that pictures belonging to a certain stimulus set point to the correct stimulus group
         # E.g. happy_XX picture points to the happy stimulus. 
         self.INV_stimulus_sets = dict((v, k) for k in self.stimulus_sets for v in self.stimulus_sets[k])
@@ -1503,10 +1655,17 @@ class DataImporter:
             q_cols, numeric_q_cols, cat_q_cols = [], [], []
             # Create empty lists to store block numbers, trial numbers within each block, total trial numbers and practice trials
             sessionlst, blocks, trials, total_trials, practice = [], [], [], [], []
+            if self._hasBlocksJson:
+                self.globalTrialNum = []
+                self.conditionSwitchTrials = {}
+                globalCumulativeTrials = 1
             # For each session (Push X, Pull X etc)
             for session in session_names:
                 # Extract the session tasks (e.g. demographics)
                 task_names = self.sessions[session]['tasks']
+                if self._hasBlocksJson:
+                    _OldBlockID = None
+                    sessionSwitchTrials = {}
                 for task in task_names:
                     # Try to get the task type (e.g. questionaire -> Demographics is a type questionaire, while something like the 
                     # experiment trials would be an 'aat' type)
@@ -1566,47 +1725,81 @@ class DataImporter:
                                 pass
                     # If participants are doing the AAT trials 
                     elif task_type == 'aat':
-                        
-                        # Count the number of practice images from stimulus_sets.json. 
-                        # Here, targets are one of the stimulus types (e.g. happy faces) and controls are the other (e.g. angry faces)
-                        num_practice = sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['practice_targets'][0]]])
-                        num_practice += sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['practice_controls'][0]]])
-                        
-                        # Check if there is a specified number of repititions, if not default to 1. 
-                        target_rep = max(1, float(self.tasks[task]['target_rep']))
-                        # Count the number of experiment images, from one stimulus set
-                        num_stim = sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['targets'][0]]]) * target_rep
-                        # Check if there is a specified number of repititions, if not default to 1. 
-                        control_rep = max(1, float(self.tasks[task]['control_rep']))
-                        # Add number of experiment images from other stimulus set to get total number of experiment images
-                        num_stim += sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['controls'][0]]]) * control_rep
-
-                        # Extract the number of blocks 
-                        num_blocks = self.tasks[task]['amount_of_blocks']
-                        cumulative_trials = 1
-
-                        # For each block
-                        for b in range(num_blocks):
-                            # Practice blocks are given by b = 0 and b = num_stim/2. The second practice blocks 
-                            # corresponds to the inverted condition (e.g. Pull X --> Push X)
-                            if b == 0 or b == num_blocks/2:
-                                num_trials = int(num_practice/2.)
-                                is_practice = True
-                            else:
-                                num_trials = int(num_stim/(num_blocks - 2))
+                        # Check if aat task points to blocks in blocks.json or in tasks.
+                        if self._hasBlocksJson:
+                            cumulative_trials = 1
+                            for block_num, block_id in enumerate(self.tasks[task]['blocks']):
+                                block = self._blocks[block_id]
                                 is_practice = False
+                                # Check if it is a practice trial
+                                if 'give_feedback' in block.keys():
+                                    is_practice = block['give_feedback']
+                                amount_of_trials = 0
+                                for response in ['push', 'pull']:
+                                    response_definition = block[response]
+                                    for chooser in response_definition['stimuli']:
+                                        stim_set = chooser['from']
+                                        num_repetitions = 1
+                                        if 'repeat' in chooser.keys():
+                                            num_repetitions = chooser['repeat']
+                                        amount_of_trials += chooser['pick'] * num_repetitions
+                                        # If mulitple AATs are under one 'session', identify where they change by looking
+                                        # at which stimset they come from. 
+                                        if block_id != _OldBlockID:
+                                            sessionSwitchTrials.update({block_id:globalCumulativeTrials})
+                                            _OldBlockID = block_id
+                                for t in range(0, int(amount_of_trials)):
+                                    sessionlst.append(session)
+                                    self.globalTrialNum.append(globalCumulativeTrials)
+                                    blocks.append(block_num + 1)
+                                    trials.append(t + 1)
+                                    total_trials.append(cumulative_trials)
+                                    practice.append(is_practice)
+                                    # Add to total trials
+                                    cumulative_trials += 1
+                                    globalCumulativeTrials += 1
 
-                            # For each of the experiment trials (i.e. sets of Push X and Pull Y)
-                            for t in range(0, num_trials):
-                                # Record session (e.g. Push X), Block #, Within-block trial #
-                                # total trial #, and if current trial is a practice session. 
-                                sessionlst.append(session)
-                                blocks.append(b + 1)
-                                trials.append(t + 1)
-                                total_trials.append(cumulative_trials)
-                                practice.append(is_practice)
-                                # Add to total trials
-                                cumulative_trials += 1
+                        else:
+                            # Count the number of practice images from stimulus_sets.json. 
+                            # Here, targets are one of the stimulus types (e.g. happy faces) and controls are the other (e.g. angry faces)
+                            num_practice = sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['practice_targets'][0]]])
+                            num_practice += sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['practice_controls'][0]]])
+                            
+                            # Check if there is a specified number of repititions, if not default to 1. 
+                            target_rep = max(1, float(self.tasks[task]['target_rep']))
+                            # Count the number of experiment images, from one stimulus set
+                            num_stim = sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['targets'][0]]]) * target_rep
+                            # Check if there is a specified number of repititions, if not default to 1. 
+                            control_rep = max(1, float(self.tasks[task]['control_rep']))
+                            # Add number of experiment images from other stimulus set to get total number of experiment images
+                            num_stim += sum([len([i]) for i in self.stimulus_sets[self.tasks[task]['controls'][0]]]) * control_rep
+
+                            # Extract the number of blocks 
+                            num_blocks = self.tasks[task]['amount_of_blocks']
+                            cumulative_trials = 1
+
+                            # For each block
+                            for b in range(num_blocks):
+                                # Practice blocks are given by b = 0 and b = num_stim/2. The second practice blocks 
+                                # corresponds to the inverted condition (e.g. Pull X --> Push X)
+                                if b == 0 or b == num_blocks/2:
+                                    num_trials = int(num_practice/2.)
+                                    is_practice = True
+                                else:
+                                    num_trials = int(num_stim/(num_blocks - 2))
+                                    is_practice = False
+
+                                # For each of the experiment trials (i.e. sets of Push X and Pull Y)
+                                for t in range(0, num_trials):
+                                    # Record session (e.g. Push X), Block #, Within-block trial #
+                                    # total trial #, and if current trial is a practice session. 
+                                    sessionlst.append(session)
+                                    blocks.append(b + 1)
+                                    trials.append(t + 1)
+                                    total_trials.append(cumulative_trials)
+                                    practice.append(is_practice)
+                                    # Add to total trials
+                                    cumulative_trials += 1
                     # If task type is not questionaire or aat (e.g. instruction, informed consent), store session
                     # only 
                     else:
@@ -1615,6 +1808,10 @@ class DataImporter:
                         trials.append(np.nan)
                         total_trials.append(np.nan)
                         practice.append('NA')
+                self.conditionSwitchTrials.update({session:sessionSwitchTrials})
+            # import code
+            # code.interact(local=locals())
+            self.globalSwitchTrials.update({condition:self.conditionSwitchTrials})
 
             # Create full list of columns
             cols = self.cols + sorted(q_cols) + self.aat_cols
@@ -1627,13 +1824,19 @@ class DataImporter:
                               'IS_PRACTICE_COLUMN', 'TRIAL_NUMBER_COLUMN', 'TRIAL_NUMBER_CUM_COLUMN']
             # NOTE: Order in the data list should mirror that of the "cols_with_data" variable above
             data_list = [condition, sessionlst, blocks, practice, trials, total_trials]
+            if self._hasBlocksJson:
+                cols_with_data.append('_globalTrials')
+                data_list.append(self.globalTrialNum)
             for i in range(len(cols_with_data)):
                 condition_table[self.constants[cols_with_data[i]]] = data_list[i]
 
             # Set custom index for the dataframe for easy referencing when inputting AAT data. 
             # Structure as index = [Session Column, Block Column, Trial Number]
             # Example index: ['push_happy', '2', '10'] -> Push Happy session, block 2, trial 10. 
-            condition_table = condition_table.set_index([self.constants['SESSION_COLUMN'], self.constants['BLOCK_COLUMN'], self.constants['TRIAL_NUMBER_COLUMN']]).sort_index()
+            if self._hasBlocksJson:
+                condition_table = condition_table.set_index([self.constants['SESSION_COLUMN'], self.constants['BLOCK_COLUMN'], self.constants['TRIAL_NUMBER_COLUMN'], self.constants['_globalTrials']]).sort_index()
+            else:
+                condition_table = condition_table.set_index([self.constants['SESSION_COLUMN'], self.constants['BLOCK_COLUMN'], self.constants['TRIAL_NUMBER_COLUMN']]).sort_index()
 
             # Store table under relevant condition, such that it can be accessed by other functions in the
             # DataImporter object. 
@@ -1677,7 +1880,7 @@ class Plotter:
 
     # Function to plot the acceleration, in the x, y, and z directions, as a function of time
     # Units: Acceleration in m/s^2 and Time in ms (milliseconds)
-    def AccelerationTime(self, participant, DF, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+    def AccelerationTime(self, participant, DF, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], YLims = None, HideLegend = False, **kwargs):
         AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
                    'Y':['ACCELERATION_Y_COLUMN', 1], 
                    'Z':['ACCELERATION_COLUMN', 2]}
@@ -1706,10 +1909,19 @@ class Plotter:
             for ax in axis:
                 plt.plot(DF[self.constants['TIME_COLUMN']][participant], DF[self.constants[AxisMap[ax][0]]][participant], label = ax)
 
-            plt.legend()
+            if not HideLegend:
+                plt.legend()
             plt.grid()
-            plt.xlabel('Time [ms]')
-            plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+            if ShowAxis[0]:
+                plt.xlabel('Time [ms]')
+            else:
+                plt.gca().set_xticklabels([])
+            if ShowAxis[1]:
+                plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+            else:
+                plt.gca().set_yticklabels([])
+            if YLims is not None:
+                plt.ylim(YLims)
         elif all (key in DF.columns for key in AveragedCols):
             try:
                 if not stimulus: 
@@ -1729,12 +1941,22 @@ class Plotter:
                             t = DF.loc[participant, 'time']
                             y = DF.loc[participant, col][AxisMap[ax][1]]
                             reqShape = t.shape
-                            plt.plot(t.T, y.reshape(reqShape).T, label = '{} ({} {})'.format(ax, mov, stim))
+                            # plt.plot(t.T, y.reshape(reqShape).T, label = '{} {} ({})'.format(mov, stim, ax))
+                            plt.plot(t.T, y.reshape(reqShape).T, label = '{}'.format(stim))
 
-                plt.legend()
+                if not HideLegend:
+                    plt.legend()
                 plt.grid()
-                plt.xlabel('Time [ms]')
-                plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+                if ShowAxis[0]:
+                    plt.xlabel('Time [ms]')
+                else:
+                    plt.gca().set_xticklabels([])
+                if ShowAxis[1]:
+                    plt.ylabel(r'Acceleration $\frac{m}{s^2}$')
+                else:
+                    plt.gca().set_yticklabels([])
+                if YLims is not None:
+                    plt.ylim(YLims)
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
                 print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
@@ -1746,7 +1968,7 @@ class Plotter:
 
     # Function to plot the displacement, in the x, y, and z directions, as a function of time
     # Units: Displacement in cm and Time in ms (milliseconds)
-    def DistanceTime(self, participant, DF, Threshold = 60, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, **kwargs):
+    def DistanceTime(self, participant, DF, Threshold = 60, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], YLims = None, HideLegend = False, **kwargs):
         AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
                    'Y':['DISTANCE_Y_COLUMN', 1], 
                    'Z':['DISTANCE_Z_COLUMN', 2]}
@@ -1786,10 +2008,19 @@ class Plotter:
                 plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_UpperBound, color = 'k', linestyle = '--', label = 'Maximum Realistic Distance')
                 plt.plot(DF[self.constants['TIME_COLUMN']][participant], Distance_LowerBound, color = 'k', linestyle = '--')
 
-            plt.legend()
+            if not HideLegend:
+                plt.legend()
             plt.grid()
-            plt.xlabel('Time [ms]')
-            plt.ylabel(r'Distance [cm]')
+            if ShowAxis[0]:
+                plt.xlabel('Time [ms]')
+            else:
+                plt.gca().set_xticklabels([])
+            if ShowAxis[1]:
+                plt.ylabel(r'Distance [cm]')
+            else:
+                plt.gca().set_yticklabels([])
+            if YLims is not None:
+                plt.ylim(YLims)
 
         elif all (key in DF.columns for key in AveragedCols):
             try:
@@ -1824,10 +2055,19 @@ class Plotter:
                     plt.plot(DF.loc[participant, 'time'], Distance_UpperBound, color = 'k', linestyle='--', label = 'Maximum Realistic Distance')
                     plt.plot(DF.loc[participant, 'time'], Distance_LowerBound, color = 'k', linestyle='--')
 
-                plt.legend()
+                if not HideLegend:
+                    plt.legend()
                 plt.grid()
-                plt.xlabel('Time [ms]')
-                plt.ylabel(r'Distance [cm]')
+                if ShowAxis[0]:
+                    plt.xlabel('Time [ms]')
+                else:
+                    plt.gca().set_xticklabels([])
+                if ShowAxis[1]:
+                    plt.ylabel(r'Distance [cm]')
+                else:
+                    plt.gca().set_yticklabels([])
+                if YLims is not None:
+                    plt.ylim(YLims)
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
@@ -2556,7 +2796,8 @@ class Plotter:
                 metric = getParam(Params, 'metric', func), axis = getParam(Params, 'axis', func), 
                 movement = getParam(Params, 'movement', func), stimulus = getParam(Params, 'stimulus', func),
                 Gradient = getParam(Params, 'Gradient', func), ColorMap = getParam(Params, 'ColorMap', func), 
-                Threshold = getParam(Params, 'Threshold', func))
+                Threshold = getParam(Params, 'Threshold', func), YLims = getParam(Params, 'YLims', func), 
+                ShowAxis = getParam(Params, 'ShowAxis', func), HideLegend = getParam(Params, 'HideLegend', func))
 
         return None
 
@@ -2576,6 +2817,55 @@ class Analysis:
         self.INFO = printINFO
         self.Control = Control
         self.Target = Target
+
+
+    def FuseStimulusSets(self, DataFrame, Mapping, sgParams = None):
+        DF = DataFrame.copy(deep = True)
+        stimSetCol = self.constants['STIMULUS_SET_COLUMN']
+        sessionCol = self.constants['SESSION_COLUMN']
+
+        idxs = {'{}'.format(self.Target):[], '{}'.format(self.Control):[]}
+
+        execution_time = 0
+        sTime = time.time()
+
+        N = 0
+        for session in Mapping.keys():
+            for stimset in Mapping[session].keys():
+                N += 1
+        
+        i = 0
+        for session in Mapping.keys():
+            for stimset in Mapping[session].keys():
+                if sgParams:
+                    sgParams['PERCENTAGE'].Update('{:2d} %'.format(int(100*(i+1)/N)))
+                    sgParams['PROG_BAR'].UpdateBar(i + 1, N)
+                    timeRemainingS = execution_time/(i + 1) * (N - i + 1)
+                    sgParams['TIME'].Update('Time remaining:{:6d} [s]'.format(int(timeRemainingS)))
+                    events, values = sgParams['WINDOW'].read(timeout=1)
+                    if events in (sg.WIN_CLOSED, '-CANCEL-'):
+                        sgParams.update({'IS_CLOSED':True})
+                        break
+                try:
+                    idxList = idxs[Mapping[session][stimset]]
+                    sessionIdx = np.where(DF[sessionCol].str.match(session))[0]
+                    stimIdx = np.where(DF[stimSetCol].str.match(stimset))[0]
+                    idx = np.intersect1d(sessionIdx, stimIdx)
+                    # *idxList unpacks idxList, and *idx unpacks idx, the result is a combined list of indexes
+                    idxList = [*idxList, *idx]
+                    idxs.update({Mapping[session][stimset]:idxList})
+                except KeyError:
+                    print('[ ERROR ] Please check Mapping. The provided mapping element: {} is not compatible with the target: {} or control: {}'.format(Mapping[session][stimset], self.Target, self.Control))
+                    DF = None
+                    break
+                i += 1
+                execution_time = time.time() - sTime
+        
+        if DF is not None:
+            DF.at[idxs[self.Target], stimSetCol] = self.Target
+            DF.at[idxs[self.Control], stimSetCol] = self.Control
+
+        return DF
 
 
     # Function to compute the mean and standard deviation of the 
@@ -2662,19 +2952,19 @@ class Analysis:
         if sgParams is not None:
             sgParams['OUTPUT'].print('[ INFO ] General statistics')
 
-        Stats = []
+        Stats = {}
 
         RTStats = ComputeStats('Reaction time [ms]', self.constants['RT_COLUMN'], Control, Target, 
                               PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
-        Stats.append(RTStats)
+        Stats.update({'RT':RTStats})
         if self.constants['DELTA_A_COLUMN'] in DataFrame.columns:  
             DAStats = ComputeStats('Peak acceleration [m/s^-2]', self.constants['DELTA_A_COLUMN'], Control, Target, 
                                 PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
-            Stats.append(DAStats)
+            Stats.update({'Acceleration':DAStats})
         if self.constants['DELTA_D_COLUMN'] in DataFrame.columns:  
             DDStats = ComputeStats('Peak displacement [m]', self.constants['DELTA_D_COLUMN'], Control, Target, 
                                 PullIdx.to_numpy(), PushIdx.to_numpy(), ControlIdx.to_numpy(), TargetIdx.to_numpy())
-            Stats.append(DDStats)
+            Stats.update({'Distance':DDStats})
         
         if Save2CSV:
             print('[INFO] Saving general statistics in directory: {}'.format(SavePath))
@@ -2684,7 +2974,7 @@ class Analysis:
 
 
 
-    def LinearMixedModels(self, DataFrame, Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False, sgParams = None):
+    def LinearMixedModels(self, DataFrame, Save2CSV = False, Verbose = False, SavePath = None, ReturnModel = False, ReturnModelSummary = False, sgParams = None):
         ExpectedCols = [self.constants['STIMULUS_SET_COLUMN'], self.constants['CORRECT_RESPONSE_COLUMN'],
                         self.constants['RT_COLUMN'], self.constants['PARTICIPANT_COLUMN']]
 
@@ -2703,8 +2993,8 @@ class Analysis:
 
         if all (key in DataFrame.columns for key in ExpectedCols):
             # Remove practice trials:
-            DF = DF[(DF[self.constants['STIMULUS_SET_COLUMN']] != '{}_practice'.format(Target)) 
-                       & (DF[self.constants['STIMULUS_SET_COLUMN']] != '{}_practice'.format(Control))]
+            DF = DF[(~DF[self.constants['STIMULUS_SET_COLUMN']].str.contains('practice')) 
+                       & (~DF[self.constants['STIMULUS_SET_COLUMN']].str.contains('practice'))]
 
             # Specify the independent variables
             DF['is_{}'.format(Target)] = DF[self.constants['STIMULUS_SET_COLUMN']]
@@ -2773,7 +3063,7 @@ class Analysis:
             # and use this array to remove these rows from the DF. 
             BoolIdx = np.ones(len(DF.index), dtype=bool)
             BoolIdx[NaNIdx] = False
-
+        
             print('\n[WARNING] Removing data from {} trials ({}% of total trials) due to missing information'.format(len(NaNIdx), len(NaNIdx)/len(DF.index)*100))
 
             if sgParams is not None:
@@ -2787,16 +3077,18 @@ class Analysis:
             print('[INFO] Linear Mixed Model: Reaction Time (1/RT)')
             if sgParams is not None:
                 sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: Reaction Time (1/RT)')
-            md = smf.mixedlm(formula = 'invRT ~ is_pull * is_happy', data = DF, 
+            md = smf.mixedlm(formula = 'invRT ~ is_pull * is_{}'.format(Target), data = DF, 
                             groups=DF['participant'].astype('category'), 
-                            re_formula='~is_pull * is_happy')
+                            re_formula='~is_pull * is_{}'.format(Target))
             mdf = md.fit()
             print(mdf.summary())
             if sgParams is not None:
                 sgParams['OUTPUT'].print(f'{mdf.summary()}')
+                sgParams['WINDOW'].refresh()
             print('\n')
 
-            models.update({'rt':md})
+            if ReturnModel:
+                models.update({'rt':md})
 
             if Save2CSV:
                 filename = 'LMM_Results_ReactionTime.csv'
@@ -2808,16 +3100,18 @@ class Analysis:
                 print('[INFO] Linear Mixed Model: (Change in) Acceleration')
                 if sgParams is not None:
                     sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: (Peak) Acceleration')  
-                md = smf.mixedlm(formula = 'mda ~ is_pull * is_happy', data = DF, 
+                md = smf.mixedlm(formula = 'mda ~ is_pull * is_{}'.format(Target), data = DF, 
                                 groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
-                                re_formula='~is_pull * is_happy')
+                                re_formula='~is_pull * is_{}'.format(Target))
                 mdf = md.fit()
                 print(mdf.summary())
                 if sgParams is not None:
-                    sgParams['OUTPUT'].print(f'{mdf.summary()}')                
+                    sgParams['OUTPUT'].print(f'{mdf.summary()}')
+                    sgParams['WINDOW'].refresh()                
                 print('\n')
 
-                models.update({'mda':md})
+                if ReturnModel:
+                    models.update({'mda':md})
 
                 if Save2CSV:
                     filename = 'LMM_Results_Acceleration.csv'
@@ -2829,16 +3123,18 @@ class Analysis:
                 print('[INFO] Linear Mixed Model: (Change in) Distance')   
                 if sgParams is not None:
                     sgParams['OUTPUT'].print('\n[ INFO ] Linear Mixed Model: (Peak) Distance')                
-                md = smf.mixedlm(formula = 'mdd ~ is_pull * is_happy', data = DF, 
+                md = smf.mixedlm(formula = 'mdd ~ is_pull * is_{}'.format(Target), data = DF, 
                                 groups=DF[self.constants['PARTICIPANT_COLUMN']].astype('category'), 
-                                re_formula='~is_pull * is_happy')
+                                re_formula='~is_pull * is_{}'.format(Target))
                 mdf = md.fit()
                 print(mdf.summary())
                 if sgParams is not None:
-                    sgParams['OUTPUT'].print(f'{mdf.summary()}')                
+                    sgParams['OUTPUT'].print(f'{mdf.summary()}')
+                    sgParams['WINDOW'].refresh()                
                 print('\n')
 
-                models.update({'mdd':md})
+                if ReturnModel:
+                    models.update({'mdd':md})
 
                 if Save2CSV:
                     filename = 'LMM_Results_Distance.csv'
@@ -3129,6 +3425,7 @@ class Analysis:
                     for m in metrics:
                         Data[idx]['{} {} {}'.format(m, mov, Control)] = C_Avg[m]
                         Data[idx]['{} {} {}'.format(m, mov, Target)] = T_Avg[m]
+
             else:
                 Data.append(Cols.copy())
                 for col in Cols.keys():

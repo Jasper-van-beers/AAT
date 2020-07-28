@@ -2,8 +2,10 @@ import PySimpleGUI as sg
 import os
 import json
 import numpy as np
+import xlsxwriter as xls
+import pandas as pd
 
-from AAT import AAT
+import AAT as AAT
 #=======================================================================================================================#
 # https://pysimplegui.readthedocs.io/en/latest/cookbook/
 #=======================================================================================================================#
@@ -23,12 +25,12 @@ def StartWindow(Title, config = None):
 
         return disabled, values
 
-    isDefault = [True, False, False]
+    isDefault = [True, False, False, False]
     isDisabled = [not i for i in isDefault]
 
     if config is not None:
-        if int(config['Analysis Method']) in (0, 1, 2):
-            isDefault = [False, False, False]
+        if int(config['Analysis Method']) in (0, 1, 2, 3):
+            isDefault = [False, False, False, False]
             isDefault[int(config['Analysis Method'])] = True
             isDisabled = [not i for i in isDefault]
 
@@ -37,13 +39,15 @@ def StartWindow(Title, config = None):
               [sg.Checkbox('Import raw data and run both processing and analysis', default = isDefault[0], disabled = isDisabled[0], key = '-BOTH_RAW-', enable_events=True)],
               [sg.Checkbox('Import raw data and run processing only', key = '-PRE_RAW-', default = isDefault[1], disabled = isDisabled[1], enable_events=True)],
               [sg.Checkbox('Import from file and run processing only', key = '-PRE_IMPORT-', default = isDefault[2], disabled = isDisabled[2], enable_events=True)],
+              [sg.Checkbox('Import from file and run analysis only', key = '-ANA_IMPORT-', default = isDefault[3], disabled = isDisabled[3], enable_events=True)],
               [sg.Text('')],
               [sg.Text('')],
               [sg.Cancel(key='-CANCEL-'), sg.Button('Next', key='-NEXT-', disabled=False)]]
 
     window = sg.Window(Title, layout)
 
-    defaults = {'-BOTH_RAW-':False, '-PRE_RAW-':True, '-PRE_IMPORT-':True}
+    defaults = {'-BOTH_RAW-':False, '-PRE_RAW-':True, '-PRE_IMPORT-':True, '-ANA_IMPORT-':True}
+    mapping = {'-BOTH_RAW-':0, '-PRE_RAW-':1, '-PRE_IMPORT-':2, '-ANA_IMPORT-':3}
     cancelled = False
     while True:
         event, value = window.read()
@@ -63,12 +67,7 @@ def StartWindow(Title, config = None):
     if not cancelled:
         for key in value.keys():
             if value[key] and key in defaults.keys():
-                if key == '-BOTH_RAW-':
-                    RunAll = 1
-                elif key == '-PRE_RAW-':
-                    RunAll = 2
-                else:
-                    RunAll = 3
+                RunAll = mapping[key]
                 break
     else:
         RunAll = None
@@ -88,7 +87,7 @@ def PreProcessFolder(Title, config = None):
                 '-COND_DATA_DIR-':'',
                 '-SAVE-':False,
                 '-SAVE_FILENAME-':'My_Processed_AAT_Data',
-                '-PRE_SAVE_DIR-':'', 
+                '-SAVE_DIR-':'', 
                 '-SMALLSAVE-':False,
                 '-SAVECSV-':False}
     isDisabled = True
@@ -98,7 +97,7 @@ def PreProcessFolder(Title, config = None):
                          '-COND_DATA_DIR-':Dirs['Conditions File Path']})
             
         if Dirs['Save File']:
-            defaults.update({'-PRE_SAVE_DIR-':Dirs['Save Path']})
+            defaults.update({'-SAVE_DIR-':Dirs['Save Path']})
             defaults.update({'-SAVE-':Dirs['Save File']})
             defaults.update({'-SAVE_FILENAME-':Dirs['Save Filename']})
             defaults.update({'-SMALLSAVE-':Dirs['Save Condensed']})
@@ -120,9 +119,9 @@ def PreProcessFolder(Title, config = None):
               [sg.In(default_text=defaults['-COND_DATA_DIR-'], size=fieldEntrySize, key = '-COND_DATA_DIR-', enable_events=True), sg.FolderBrowse()],
               [sg.Text('')],
               [sg.Checkbox('Would you like to save the processed files?', key='-SAVE-', enable_events=True, default=defaults['-SAVE-'])],
-              [sg.InputText(default_text=defaults['-PRE_SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-PRE_SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=isDisabled, key = '-SAVE_BROWSE-')],
+              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=not defaults['-SAVE-'], key = '-SAVE_BROWSE-')],
               [sg.Text('Save filename:', text_color=bColors[int(defaults['-SAVE-'])], key='-SF_TEXT-'), sg.InputText(default_text=defaults['-SAVE_FILENAME-'], size=(50, 1), key='-SAVE_FILENAME-', disabled = not defaults['-SAVE-'], text_color=tColors[int(defaults['-SAVE-'])])],
-              [sg.Checkbox('Save condensed data', key='-SMALLSAVE-', enable_events = True, default=defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-']),
+              [sg.Checkbox('Save condensed data', key='-SMALLSAVE-', enable_events = True, default=defaults['-SMALLSAVE-'], disabled=not defaults['-SAVE-']),
                sg.Checkbox('Save as .csv', key='-SAVECSV-', enable_events = True, default=defaults['-SAVECSV-']*defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-'])],
               [sg.Cancel(key = '-CANCEL-'), sg.Button('Next', key = '-NEXT-', disabled=isDisabled)]]
 
@@ -138,14 +137,14 @@ def PreProcessFolder(Title, config = None):
             break
         if event == '-SAVE-':
             if value[event]:
-                window['-PRE_SAVE_DIR-'].update(disabled=False, text_color=tColors[int(value['-SAVE-'])])
+                window['-SAVE_DIR-'].update(disabled=False, text_color=tColors[int(value['-SAVE-'])])
                 window['-SAVE_BROWSE-'].update(disabled=False)
                 window['-SAVE_FILENAME-'].update(disabled=False, text_color=tColors[int(value['-SAVE-'])])
                 window['-SF_TEXT-'].update(text_color = bColors[int(value['-SAVE-'])])
                 window['-SMALLSAVE-'].update(disabled=False)
                 window['-SAVECSV-'].update(disabled=not value['-SMALLSAVE-'])
             else:
-                window['-PRE_SAVE_DIR-'].update(disabled=True, text_color=tColors[int(value['-SAVE-'])])
+                window['-SAVE_DIR-'].update(disabled=True, text_color=tColors[int(value['-SAVE-'])])
                 window['-SAVE_BROWSE-'].update(disabled=True)
                 window['-SAVE_FILENAME-'].update(disabled=True, text_color=tColors[int(value['-SAVE-'])])
                 window['-SF_TEXT-'].update(text_color = bColors[int(value['-SAVE-'])])
@@ -157,7 +156,7 @@ def PreProcessFolder(Title, config = None):
             else:
                 window['-SAVECSV-'].update(disabled=True)
         if value['-SAVE-']:
-            if all(os.path.isdir(value[key]) for key in inputFieldKeys) and os.path.isdir(value['-PRE_SAVE_DIR-']):
+            if all(os.path.isdir(value[key]) for key in inputFieldKeys) and os.path.isdir(value['-SAVE_DIR-']):
                 window['-NEXT-'].update(disabled=False)
             else:
                 window['-NEXT-'].update(disabled=True)
@@ -171,7 +170,7 @@ def PreProcessFolder(Title, config = None):
 
     # If save is deselected, clear all saveparams
     if not value['-SAVE-']:
-        value['-PRE_SAVE_DIR-'] = None
+        value['-SAVE_DIR-'] = None
         value['-SAVE_FILENAME-'] = None
         value['-SMALLSAVE-'] = None
         value['-SAVECSV-'] = None
@@ -279,7 +278,36 @@ def LoadFromFile(Title, config = None):
 
 
 
-def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
+def LoadData(Title, FilePath):
+
+    layout = [
+        [sg.Text('Loading data from file', font=('Helvetica', 12))],
+        [sg.Text('This may take a while, and the window may appear to stop responding. This is normal, please be patient.')],
+        [sg.Text('This window will close automatically once the file is loaded.')],
+        [sg.Cancel(key='-CANCEL-')]
+    ]
+
+    window = sg.Window(Title, layout)
+
+    cancelled = False
+    while True:
+        event, value = window.read(timeout = 1)
+        if event in (sg.WIN_CLOSED, '-CANCEL-'):
+            cancelled = True
+            break
+        Data = pd.read_pickle(FilePath)
+        break
+
+    window.close()
+
+    if cancelled:
+        Data = None    
+
+    return Data
+
+
+
+def Pre_FunctionParams(Title, config = None, ImportFilePath = None, ForAnalysis = False):
 
     def getFunctionOptionalParams(f):
         numInputArgs = f.__code__.co_argcount
@@ -352,14 +380,50 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
     DefaultDistCompParams = getFunctionOptionalParams(AAT.DataImporter.ComputeDistance)
     DefaultRFandRDParams = getFunctionOptionalParams(AAT.DataImporter.ComputeDeltaAandD)
 
-    # Default summary options
-    DefaultSummaryOptions = {'-WITHIN_AVG-':False,
-                             '-RESTRUCTURE-':False,
-                             '-BETWEEN_AVG-':False,
-                             '-GEN_STATS-':False,
-                             '-LMM-':False}
-
     DefaultRun = {'FILT':True, 'RT':True, 'ROTCORRECT':True, 'DISTANCE':True, 'RFRD':True}
+
+    # Replace defaults with config defaults, if it a config file is specified
+    if config is not None:
+        # Processing parameters config
+        configProcessing = config['Default Processing Parameters']
+        DefaultFilteringParams.update({'MinDataRatio':float(configProcessing['Filtering Parameters']['Minimum ratio of valid trials']),
+                                        'RTThreshold':float(configProcessing['Filtering Parameters']['Reaction time cutoff']),
+                                        'RemoveRT':configProcessing['Filtering Parameters']['Filter by reaction time'],
+                                        'RemoveAcc':configProcessing['Filtering Parameters']['Filter by acceleration'],
+                                        'CalibrateAcc':configProcessing['Filtering Parameters']['Correct for acceleration offset'],
+                                        'RemoveIncorrectResponses':configProcessing['Filtering Parameters']['Remove incorrect responses']
+                                        })
+
+        DefaultComputeRTParams.update({'RTResLB':float(configProcessing['Reaction Time Parameters']['Minimum acceleration for a reaction']),
+                                       'RTPeakDistance':float(configProcessing['Reaction Time Parameters']['(Assumed) Peak height width'])
+                                        })
+
+        DefaultRotCorrectParams.update({'StoreTheta':configProcessing['Rotation Correction Parameters']['Store Rotation Angles']})
+        
+        DefaultDistCompParams.update({'ComputeTotalDistance':configProcessing['Distance Computation Parameters']['Compute total distance magnitude']})
+        
+        _axes = [configProcessing['Reaction Force and Distance Parameters']['X (Vertical Axis)'], 
+                 configProcessing['Reaction Force and Distance Parameters']['Y (Lateral Axis)'],
+                 configProcessing['Reaction Force and Distance Parameters']['Z (Ventral Axis)']]
+        _axes = MapAxes(_axes)
+        _which = [configProcessing['Reaction Force and Distance Parameters']['Compute reaction forces'],
+                  configProcessing['Reaction Force and Distance Parameters']['Compute reaction distances']]
+        which = []
+        if _which[0]:
+            which.append('acceleration')
+        if _which[1]:
+            which.append('distance')
+        DefaultRFandRDParams.update({'axes':_axes,
+                                     'absolute':configProcessing['Reaction Force and Distance Parameters']['Use absolute values'],
+                                     'which':which})
+
+        DefaultRun = {'FILT':configProcessing['Filtering Parameters']['Run'],
+                      'RT':configProcessing['Reaction Time Parameters']['Run'],
+                      'ROTCORRECT':configProcessing['Rotation Correction Parameters']['Run'],
+                      'DISTANCE':configProcessing['Distance Computation Parameters']['Run'],
+                      'RFRD':configProcessing['Reaction Force and Distance Parameters']['Run']}
+
+    ForceFunctionSelection = False
 
     if ImportFilePath is not None:
         MetaDataFilePath = ImportFilePath[:-4] + '_metadata.json'
@@ -425,48 +489,7 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
         PermaDisabled = {'FILT':False, 'RT':False, 'ROTCORRECT':False, 'DISTANCE':False, 'RFRD':False}
 
 
-    # Replace defaults with config defaults, if it a config file is specified
-    if config is not None:
-        # Processing parameters config
-        configProcessing = config['Default Processing Parameters']
-        DefaultFilteringParams.update({'MinDataRatio':float(configProcessing['Filtering Parameters']['Minimum ratio of valid trials']),
-                                        'RTThreshold':float(configProcessing['Filtering Parameters']['Reaction time cutoff']),
-                                        'RemoveRT':configProcessing['Filtering Parameters']['Filter by reaction time'],
-                                        'RemoveAcc':configProcessing['Filtering Parameters']['Filter by acceleration'],
-                                        'CalibrateAcc':configProcessing['Filtering Parameters']['Correct for acceleration offset']
-                                        })
-
-        DefaultComputeRTParams.update({'RTResLB':float(configProcessing['Reaction Time Parameters']['Minimum acceleration for a reaction']),
-                                       'RTPeakDistance':float(configProcessing['Reaction Time Parameters']['(Assumed) Peak height width'])
-                                        })
-
-        DefaultRotCorrectParams.update({'StoreTheta':configProcessing['Rotation Correction Parameters']['Store Rotation Angles']})
-        
-        DefaultDistCompParams.update({'ComputeTotalDistance':configProcessing['Distance Computation Parameters']['Compute total distance magnitude']})
-        
-        _axes = [configProcessing['Reaction Force and Distance Parameters']['X (Vertical Axis)'], 
-                 configProcessing['Reaction Force and Distance Parameters']['Y (Lateral Axis)'],
-                 configProcessing['Reaction Force and Distance Parameters']['Z (Ventral Axis)']]
-        _axes = MapAxes(_axes)
-        _which = [configProcessing['Reaction Force and Distance Parameters']['Compute reaction forces'],
-                  configProcessing['Reaction Force and Distance Parameters']['Compute reaction distances']]
-        which = []
-        if _which[0]:
-            which.append('acceleration')
-        if _which[1]:
-            which.append('distance')
-        DefaultRFandRDParams.update({'axes':_axes,
-                                     'absolute':configProcessing['Reaction Force and Distance Parameters']['Use absolute values'],
-                                     'which':which})
-
-        DefaultRun = {'FILT':configProcessing['Filtering Parameters']['Run'],
-                      'RT':configProcessing['Reaction Time Parameters']['Run'],
-                      'ROTCORRECT':configProcessing['Rotation Correction Parameters']['Run'],
-                      'DISTANCE':configProcessing['Distance Computation Parameters']['Run'],
-                      'RFRD':configProcessing['Reaction Force and Distance Parameters']['Run']}
-
-    isDisabled = {i : not DefaultRun[i] for i in DefaultRun.keys()}
-
+    isDisabled = {i : (not DefaultRun[i]) for i in DefaultRun.keys()}
 
     # Window layout
     tColors = ['grey60', 'black']
@@ -479,7 +502,8 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
                                     [sg.InputText(default_text='{}'.format(DefaultFilteringParams['RTThreshold']), key='RTThreshold', disabled=isDisabled['FILT'], use_readonly_for_disable=True, text_color=tColors[int(DefaultRun['FILT'])]), sg.Text('[ms]', key = 'U_RTThreshold', text_color=bColors[int(DefaultRun['FILT'])])]]),
                         sg.Column([[sg.Checkbox('Filter by reaction time', default = DefaultFilteringParams['RemoveRT'], key='RemoveRT', disabled=isDisabled['FILT'])], 
                                    [sg.Checkbox('Filter by acceleration', default = DefaultFilteringParams['RemoveAcc'], key='RemoveAcc', disabled=isDisabled['FILT'])],
-                                   [sg.Checkbox('Correct for acceleration offset', default = DefaultFilteringParams['CalibrateAcc'], key='CalibrateAcc', disabled=isDisabled['FILT'])]])]]
+                                   [sg.Checkbox('Correct for acceleration offset', default = DefaultFilteringParams['CalibrateAcc'], key='CalibrateAcc', disabled=isDisabled['FILT'])],
+                                   [sg.Checkbox('Remove incorrect responses', default = DefaultFilteringParams['RemoveIncorrectResponses'], key='RemoveIncorrectResponses', disabled=isDisabled['FILT'])]])]]
 
     ReactionTimeLayout = [[sg.Column([[sg.Text('Minimum acceleration for a reaction', key = 'T_RTResLB', text_color=bColors[int(DefaultRun['RT'])])],
                                      [sg.Text('(Assumed) Peak height width', key = 'T_RTPeakDistance', text_color=bColors[int(DefaultRun['RT'])])]]),
@@ -532,25 +556,28 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
             order = MapDefaultRun(DefaultRun)
             order = CheckOrder(order, [value['-RF-'], value['-RD-']], exceptions = MapDefaultRun(PermaDisabled))
             if order is not None:
-                if DefaultRun['RFRD']:
-                    # Check that user has indicated to compute RF and/or RD
-                    if value['-RF-'] or value['-RD-']:
-                        value.update({'order':order})
-                        # Check that at least 1-axis has been selected:
-                        if all(not i for i in [value['-X-'], value['-Y-'], value['-Z-']]):
-                            sg.PopupError('ERROR\nUser selected to <Compute reaction force and distance>\nHowever, no axis has been chosen for which these parameters should be computed.')
-                        else:
-                            break
-                    else:
-                        sg.PopupError('ERROR\nUser selected to <Compute reaction force and distance>\nHowever, neither option:\n\t<Compute Reaction Force> and/or <Compute Reaction Distance>\nwas selected under <Reaction Force and Distance Parameters>')
-
+                if ForAnalysis and 'FILT' not in order:
+                    sg.PopupError('ERROR\n User has selected to run analysis. The analysis cannot be run unless <Run Filtering> is selected here.')
                 else:
-                    # Make sure that a function is being run
-                    if len(order) == 0 and ForceFunctionSelection:
-                        sg.PopupError('ERROR\nUser has imported a file, but has not selected any processing functions to run on this file.')
+                    if DefaultRun['RFRD']:
+                        # Check that user has indicated to compute RF and/or RD
+                        if value['-RF-'] or value['-RD-']:
+                            value.update({'order':order})
+                            # Check that at least 1-axis has been selected:
+                            if all(not i for i in [value['-X-'], value['-Y-'], value['-Z-']]):
+                                sg.PopupError('ERROR\nUser selected to <Compute reaction force and distance>\nHowever, no axis has been chosen for which these parameters should be computed.')
+                            else:
+                                break
+                        else:
+                            sg.PopupError('ERROR\nUser selected to <Compute reaction force and distance>\nHowever, neither option:\n\t<Compute Reaction Force> and/or <Compute Reaction Distance>\nwas selected under <Reaction Force and Distance Parameters>')
+
                     else:
-                        value.update({'order':order})
-                        break
+                        # Make sure that a function is being run
+                        if len(order) == 0 and ForceFunctionSelection:
+                            sg.PopupError('ERROR\nUser has imported a file, but has not selected any processing functions to run on this file.')
+                        else:
+                            value.update({'order':order})
+                            break
         # RUN0 corresponds to filtering parameters
         if event == '-RUN0-':
             isDisabled['FILT'] = not value['-RUN0-']
@@ -563,6 +590,7 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
             window['RemoveRT'].update(disabled=isDisabled['FILT'])
             window['RemoveAcc'].update(disabled=isDisabled['FILT'])
             window['CalibrateAcc'].update(disabled=isDisabled['FILT'])
+            window['RemoveIncorrectResponses'].update(disabled=isDisabled['FILT'])
         # RUN1 corresponds to the reaction time parameters
         if event == '-RUN1-':
             isDisabled['RT'] = not value['-RUN1-']
@@ -606,146 +634,282 @@ def Pre_FunctionParams(Title, config = None, ImportFilePath = None):
 
 
 def AnalysisParams(Title, Data, config = None, ImportFilePath = None):
-    # Default summary options
-    PreProLabel = 'Preprocessed data'
-    WithinLabel = 'Within participant averaged data'
-    TarOptions = {True:[PreProLabel, WithinLabel], False:[PreProLabel]}
-    DefaultSummaryOptions = {'-WITHIN_AVG-':False,
-                             '-RESTRUCTURE-':False,
-                             '-BETWEEN_AVG-':False,
-                             '-GEN_STATS-':False,
-                             '-LMM-':False,
-                             '-GEN_STATS_TAR-':TarOptions[True],
-                             '-LMM_TAR-':TarOptions[True]}
-
-    # Infer the Control and Target stimuli
-    DataImporter = AAT.DataImporter('Dummy', 'Dummy', printINFO=False)
-    stimulus_sets = np.unique(Data[DataImporter.constants['STIMULUS_SET_COLUMN']].to_numpy())
-    stimuli = []
-    # Remove practice stimuli names
-    for stim in stimulus_sets:
-        if not 'practice' in stim.lower():
-            stimuli.append(stim)
-
-    DefaultSummaryOptions.update({'-CONTROL-':stimuli[0], '-TARGET-':stimuli[1]})
-
-    if config:
-        # Analysis options config
-        configSummary = config['Analysis Parameters']
-        DefaultSummaryOptions.update({'-WITHIN_AVG-':configSummary['Averaging Options']['Compute within participant averages'],
-                                      '-RESTRUCTURE-':configSummary['Averaging Options']['Restructure averaged data for LMM'],
-                                      '-BETWEEN_AVG-':configSummary['Averaging Options']['Compute between participant averages'],
-                                      '-GEN_STATS-':configSummary['Statistics']['Compute means and standard deviations'],
-                                      '-LMM-':configSummary['Statistics']['Compute Linear Mixed Models'],
-                                      '-CONTROL-':configSummary['Control'],
-                                      '-TARGET-':configSummary['Target'],
-                                      '-GEN_STATS_TAR-':TarOptions[configSummary['Averaging Options']['Compute within participant averages']],
-                                      '-LMM_TAR-':TarOptions[configSummary['Averaging Options']['Compute within participant averages']]})
-
-    # ANALYSIS OPTIONS LAYOUT
-    StimuliLayout = [   
-                        [sg.Column([
-                            [sg.Text('Control Stimulus')],
-                            [sg.Text('Target Stimulus')]
-                        ]),
-                         sg.Column([
-                            [sg.Combo(values=stimuli, default_value=DefaultSummaryOptions['-CONTROL-'], key='-CONTROL-', size = (20,1))],
-                            [sg.Combo(values=stimuli, default_value=DefaultSummaryOptions['-TARGET-'], key='-TARGET-', size = (20,1))]
-                         ])]
+    
+    def GroupStimSetWindow(Sessions, stimuli, values, Mapping = None, MasterWindow = True, Location = None):
+        MAP = {'+':True, '-':False}
+        INVMAP = {not v:k for k, v in MAP.items()}
+        StimSetGrouping = []
+        N = len(Sessions) * len(stimuli) * 2
+        if N > 16:
+            sessionLen = Sessions[0:4]
+            stimLen = stimuli[0:2]
+        else:
+            sessionLen = Sessions
+            stimLen = stimuli
+        for sessIdx, session in enumerate(sessionLen):
+            for stimIdx, stim in enumerate(stimLen):
+                row = [
+                        [sg.Column([[sg.Button(button_text = INVMAP[not bool(stimIdx)], enable_events = True, key = '-ADD_{}_{}-'.format(sessIdx, stimIdx))]]),
+                        sg.Column([[sg.Text('Combine data from: ')]]),
+                        sg.Column([[sg.Combo(values=list(Sessions), default_value = session, readonly = True, key = '-SESSION_{}_{}-'.format(sessIdx, stimIdx), visible = not bool(stimIdx))]]),
+                        sg.Column([[sg.Text('with: ', visible = not bool(stimIdx), key='-TEXT1_{}_{}-'.format(sessIdx, stimIdx))]]),
+                        sg.Column([[sg.Combo(values=stimuli, default_value = stim, readonly = True, key = '-STIM_{}_{}-'.format(sessIdx, stimIdx), visible = not bool(stimIdx))]]),
+                        sg.Column([[sg.Text('into set: ', visible = not bool(stimIdx), key='-TEXT2_{}_{}-'.format(sessIdx, stimIdx))]]),
+                        sg.Column([[sg.Combo(values = [values['-CONTROL-'], values['-TARGET-']], readonly=True, key = '-GRP_{}_{}-'.format(sessIdx, stimIdx), visible = not bool(stimIdx))]])]
                     ]
+                StimSetGrouping.append([sg.Column(row, key = '-ROW_{}_{}-'.format(sessIdx, stimIdx))])
+        
+        StimSetGrouping.append([sg.Column([[sg.Button(button_text = 'Add more entries', enable_events = True, key = '-NEW_WINDOW-')]])])
 
-    AveragingLayout = [
-                        [sg.Checkbox('Compute averages within participant', key = '-WITHIN_AVG-', default = DefaultSummaryOptions['-WITHIN_AVG-'], enable_events = True, tooltip='Averages over trials, of the same condition, for a given participant')],
-                        [sg.Checkbox('Restructure witin participant averages for LMM', key = '-RESTRUCTURE-', default = DefaultSummaryOptions['-RESTRUCTURE-'], disabled = not DefaultSummaryOptions['-WITHIN_AVG-'])],
-                        [sg.Checkbox('Compute averages between participant', key = '-BETWEEN_AVG-', default = DefaultSummaryOptions['-BETWEEN_AVG-'], disabled = not DefaultSummaryOptions['-WITHIN_AVG-'], tooltip='Averages, over the same conditions, across participants')]
-                    ]
+        layout = [[sg.Frame('Please indicate the group allocation', StimSetGrouping)],
+                  [sg.Cancel(key='-CANCEL-'), sg.Button(button_text = 'Confirm', enable_events = True, key = '-CONFIRM-')]]
 
-    StatisticsLayout = [
-                        [sg.Column([
-                            [sg.Checkbox('Compute means and standard deviations', key = '-GEN_STATS-', default=DefaultSummaryOptions['-GEN_STATS-'])],
-                            [sg.Checkbox('Compute Linear Mixed Model (LMM)', key = '-LMM-', default=DefaultSummaryOptions['-LMM-'])]
-                           ]),
-                         sg.Column([
-                            [sg.Text('from')],
-                            [sg.Text('from')]
-                           ]),
-                         sg.Column([
-                            [sg.Combo(DefaultSummaryOptions['-GEN_STATS_TAR-'], default_value=PreProLabel, key = '-GEN_STATS_TAR-', readonly = True, size=(30, 1))],
-                            [sg.Combo(DefaultSummaryOptions['-LMM_TAR-'], default_value=PreProLabel, key = '-LMM_TAR-', readonly = True, size=(30, 1))],
-                           ])
-                        ]
-                       ]
+        if Location is None:
+            win = sg.Window('Group allocation', layout)
+        else:
+            win = sg.Window('Group allocation', layout, location=Location)
 
-    AnalysisParamsLayout = [
-                            [sg.Text('')],
-                            [sg.Frame('Stimuli', StimuliLayout, relief=sg.RELIEF_SUNKEN)],
-                            [sg.Frame('Averaging Options', AveragingLayout, relief=sg.RELIEF_SUNKEN)],
-                            [sg.Frame('Statistics', StatisticsLayout, relief=sg.RELIEF_SUNKEN)]
-                           ]                   
+        cancelled = False
+        while True:
+            e, v = win.read()
+            if e in (sg.WIN_CLOSED, '-CANCEL-'):
+                cancelled = True
+                break
+            if e.startswith('-ADD'):
+                ID = e.split('-ADD')[-1]
+                txt = win[e].GetText()
+                win[e].update(text = INVMAP[MAP[txt]])
+                win['-SESSION{}'.format(ID)].update(visible = MAP[txt])
+                win['-TEXT1{}'.format(ID)].update(visible = MAP[txt])
+                win['-STIM{}'.format(ID)].update(visible = MAP[txt])
+                win['-TEXT2{}'.format(ID)].update(visible = MAP[txt])
+                win['-GRP{}'.format(ID)].update(visible = MAP[txt])
+            if e == '-NEW_WINDOW-':
+                loc = win.CurrentLocation()
+                Mapping = GroupStimSetWindow(Sessions, stimuli, values, Mapping = Mapping, MasterWindow = False, Location = (loc[0] + 10, loc[1] + 10) )
+            if e == '-CONFIRM-':
+                if Mapping is None:
+                    Mapping = {}
+                IDDict = {}
+                IDs = []
+                cond = {values['-CONTROL-']:False, values['-TARGET-']:False}
+                for key in v.keys():
+                    if key.startswith('-SESSION'):
+                        ID = key.split('-SESSION')[-1]
+                        IDs.append(ID)
+                        # Store which ID the key belongs to 
+                        IDDict.update({ID:v[key]})
 
+                for ID in IDs:
+                    key = '-ADD{}'.format(ID)
+                    if not MAP[win[key].GetText()]:
+                        if v['-SESSION{}'.format(ID)] in Mapping.keys():
+                            sessDict = Mapping[v['-SESSION{}'.format(ID)]]
+                        else:
+                            sessDict = {}
+                        sessDict.update({v['-STIM{}'.format(ID)]:v['-GRP{}'.format(ID)]})
+                        Mapping.update({v['-SESSION{}'.format(ID)]:sessDict})
 
-    layout = [
-                [sg.TabGroup([[sg.Tab('AnalysisParameters', AnalysisParamsLayout, font = ('Helvetica', 12))]])],
-                [sg.Cancel(key = '-CANCEL-'), sg.Button('Next', key = '-NEXT-')]
-             ]
+                # Probably a better way to do this
+                for sess in Mapping.keys():
+                    if values['-CONTROL-'] in Mapping[sess].values():
+                        cond.update({values['-CONTROL-']:True})
+                    if values['-TARGET-'] in Mapping[sess].values():
+                        cond.update({values['-TARGET-']:True})
 
-    window = sg.Window(Title, layout)
-
-    NecessaryParams = ['-WITHIN_AVG-', '-LMM-', '-GEN_STATS-']
-
-    cancelled = False
-    while True:
-        event, value = window.read()
-        if event in (sg.WIN_CLOSED, '-CANCEL-'):
-            cancelled = True
-            break
-        if event == '-NEXT-':
-            if all(not value[i] for i in NecessaryParams):
-                sg.PopupError('ERROR\n User indicated to run analysis, but no analysis functions were selected!')
-                # Check if the chosen stimuli exist in the dataframe
-            else:
-                if any(not value[stim] in stimuli for stim in ['-CONTROL-', '-TARGET-']):
-                    sg.PopupError('ERROR\n Invalid control/target stimulus.\n Expected one of the following options:\n\t {}'.format(stimuli))
+                if all(cond[key] for key in cond.keys()):
+                    break
                 else:
-                    if value['-LMM-']:
-                        if value['-LMM_TAR-'] == WithinLabel and not value['-RESTRUCTURE-']:
-                            sg.PopupError('ERROR\n User opted to compute LMM on the within participant averaged data\n However, the option to \n\t <Restructure within participant averages for LMM> \n is unselected.')
+                    if MasterWindow:
+                        sg.PopupError('ERROR \n Please make sure that at least one group is allocated to the control: <{}> \n and one group is allocated to the target: <{}>.'.format(values['-CONTROL-'], values['-TARGET-']))
+                    else:
+                        break
+
+        win.close()
+        if cancelled:
+            Mapping = None
+
+        return Mapping
+    
+
+    def CheckCompatibility(FilePath):
+        MetaDataFilepath = FilePath[0:-4] + "_metadata.json"
+        IsCompatible = False
+        if os.path.isfile(MetaDataFilepath):
+            with open(MetaDataFilepath, 'r', encoding = 'utf-8') as f:
+                jsonfile = json.loads(f.read(), strict = False)
+            f.close()
+            try:
+                if 'RESAMPLE' in jsonfile['TagList']:
+                    IsCompatible = True
+                else:
+                    sg.PopupError('ERROR\n Cannot analyse the imported file: \n {} \n since filtering (and resampling) has not been performed.'.format(MetaDataFilepath))
+            except KeyError:
+                sg.PopupError('ERROR\n Invalid metadata file in \n {} \n Cannot determine what processing has been conducted'.format(MetaDataFilepath))
+        else:
+            sg.PopupError('ERROR\n Metadata file cannot be found at expected location: \n {}'.format(MetaDataFilepath))
+        return IsCompatible
+    
+
+    if CheckCompatibility(ImportFilePath):
+        # Default summary options
+        PreProLabel = 'Preprocessed data'
+        WithinLabel = 'Within participant averaged data'
+        TarOptions = {True:[PreProLabel, WithinLabel], False:[PreProLabel]}
+        DefaultSummaryOptions = {'-WITHIN_AVG-':False,
+                                '-RESTRUCTURE-':False,
+                                '-BETWEEN_AVG-':False,
+                                '-GEN_STATS-':False,
+                                '-LMM-':False,
+                                '-GEN_STATS_TAR-':TarOptions[True],
+                                '-LMM_TAR-':TarOptions[True]}
+
+        # Infer the Control and Target stimuli
+        DataImporter = AAT.DataImporter('Dummy', 'Dummy', printINFO=False)
+        Sessions = np.unique(Data[DataImporter.constants['SESSION_COLUMN']].to_numpy())
+        stimSets = np.unique(Data[DataImporter.constants['STIMULUS_SET_COLUMN']].to_numpy())
+        stimuli = []
+        # Remove practice stimuli names
+        for stim in stimSets:
+            if not 'practice' in stim.lower():
+                stimuli.append(stim)
+
+        DefaultSummaryOptions.update({'-CONTROL-':stimuli[0], '-TARGET-':stimuli[1]})
+
+        if config:
+            # Analysis options config
+            configSummary = config['Analysis Parameters']
+            DefaultSummaryOptions.update({'-WITHIN_AVG-':configSummary['Averaging Options']['Compute within participant averages'],
+                                        '-RESTRUCTURE-':configSummary['Averaging Options']['Restructure averaged data for LMM'],
+                                        '-BETWEEN_AVG-':configSummary['Averaging Options']['Compute between participant averages'],
+                                        '-GEN_STATS-':configSummary['Statistics']['Compute means and standard deviations'],
+                                        '-LMM-':configSummary['Statistics']['Compute Linear Mixed Models'],
+                                        '-CONTROL-':configSummary['Control'],
+                                        '-TARGET-':configSummary['Target'],
+                                        '-GEN_STATS_TAR-':TarOptions[configSummary['Averaging Options']['Compute within participant averages']],
+                                        '-LMM_TAR-':TarOptions[configSummary['Averaging Options']['Compute within participant averages']]})
+
+
+        # ANALYSIS OPTIONS LAYOUT
+
+        StimuliLayout = [   
+                            [sg.Column([
+                                [sg.Text('Control Stimulus')],
+                                [sg.Text('Target Stimulus')]
+                            ]),
+                            sg.Column([
+                                [sg.Combo(values=stimuli, default_value=DefaultSummaryOptions['-CONTROL-'], key='-CONTROL-', size = (20,1))],
+                                [sg.Combo(values=stimuli, default_value=DefaultSummaryOptions['-TARGET-'], key='-TARGET-', size = (20,1))]
+                            ])],
+                            [sg.Button(button_text='Specify stimuli set allocation', enable_events = True, key='-SPECIFY_STIM_SET-')]
+                        ]
+
+        AveragingLayout = [
+                            [sg.Checkbox('Compute averages within participant', key = '-WITHIN_AVG-', default = DefaultSummaryOptions['-WITHIN_AVG-'], enable_events = True, tooltip='Averages over trials, of the same condition, for a given participant')],
+                            [sg.Checkbox('Restructure witin participant averages for LMM', key = '-RESTRUCTURE-', default = DefaultSummaryOptions['-RESTRUCTURE-'], disabled = not DefaultSummaryOptions['-WITHIN_AVG-'])],
+                            [sg.Checkbox('Compute averages between participant', key = '-BETWEEN_AVG-', default = DefaultSummaryOptions['-BETWEEN_AVG-'], disabled = not DefaultSummaryOptions['-WITHIN_AVG-'], tooltip='Averages, over the same conditions, across participants')]
+                        ]
+
+        StatisticsLayout = [
+                            [sg.Column([
+                                [sg.Checkbox('Compute means and standard deviations', key = '-GEN_STATS-', default=DefaultSummaryOptions['-GEN_STATS-'])],
+                                [sg.Checkbox('Compute Linear Mixed Model (LMM)', key = '-LMM-', default=DefaultSummaryOptions['-LMM-'])]
+                            ]),
+                            sg.Column([
+                                [sg.Text('from')],
+                                [sg.Text('from')]
+                            ]),
+                            sg.Column([
+                                [sg.Combo(DefaultSummaryOptions['-GEN_STATS_TAR-'], default_value=PreProLabel, key = '-GEN_STATS_TAR-', readonly = True, size=(30, 1))],
+                                [sg.Combo(DefaultSummaryOptions['-LMM_TAR-'], default_value=PreProLabel, key = '-LMM_TAR-', readonly = True, size=(30, 1))],
+                            ])
+                            ]
+                        ]
+
+        AnalysisParamsLayout = [
+                                [sg.Text('')],
+                                [sg.Frame('Stimuli', StimuliLayout, relief=sg.RELIEF_SUNKEN)],
+                                [sg.Frame('Averaging Options', AveragingLayout, relief=sg.RELIEF_SUNKEN)],
+                                [sg.Frame('Statistics', StatisticsLayout, relief=sg.RELIEF_SUNKEN)]
+                            ]                   
+
+
+        layout = [
+                    [sg.TabGroup([[sg.Tab('AnalysisParameters', AnalysisParamsLayout, font = ('Helvetica', 12))]])],
+                    [sg.Cancel(key = '-CANCEL-'), sg.Button('Next', key = '-NEXT-')]
+                ]
+
+        window = sg.Window(Title, layout)
+
+        NecessaryParams = ['-WITHIN_AVG-', '-LMM-', '-GEN_STATS-']
+
+        cancelled = False
+        StimSetMapping = None
+        while True:
+            event, value = window.read()
+            if event in (sg.WIN_CLOSED, '-CANCEL-'):
+                cancelled = True
+                break
+            if event == '-NEXT-':
+                if all(not value[i] for i in NecessaryParams):
+                    sg.PopupError('ERROR\n User indicated to run analysis, but no analysis functions were selected!')
+                    # Check if the chosen stimuli exist in the dataframe
+                else:
+                    if StimSetMapping is not None:
+                        if value['-LMM-']:
+                            if value['-LMM_TAR-'] == WithinLabel and not value['-RESTRUCTURE-']:
+                                sg.PopupError('ERROR\n User opted to compute LMM on the within participant averaged data\n However, the option to \n\t <Restructure within participant averages for LMM> \n is unselected.')
+                            else:
+                                break
                         else:
                             break
                     else:
-                        break
-        if event == '-WITHIN_AVG-':
-            window['-RESTRUCTURE-'].update(disabled = not value['-WITHIN_AVG-'])
-            window['-BETWEEN_AVG-'].update(disabled = not value['-WITHIN_AVG-'])
-            window['-GEN_STATS_TAR-'].update(value = PreProLabel, values=TarOptions[value['-WITHIN_AVG-']])
-            window['-LMM_TAR-'].update(value = PreProLabel, values=TarOptions[value['-WITHIN_AVG-']])
-            if not value['-WITHIN_AVG-']:
-                window['-RESTRUCTURE-'].update(value=False)
-                window['-BETWEEN_AVG-'].update(value=False)
+                        sg.PopupError('ERROR\n Mapping of stimulus sets to control: {} and to target: {} has not been specified.\n Please click <Specify stimuli set allocation>'.format(value['-CONTROL-'], value['-TARGET-']))
+            if event == '-WITHIN_AVG-':
+                window['-RESTRUCTURE-'].update(disabled = not value['-WITHIN_AVG-'])
+                window['-BETWEEN_AVG-'].update(disabled = not value['-WITHIN_AVG-'])
+                window['-GEN_STATS_TAR-'].update(value = PreProLabel, values=TarOptions[value['-WITHIN_AVG-']])
+                window['-LMM_TAR-'].update(value = PreProLabel, values=TarOptions[value['-WITHIN_AVG-']])
+                if not value['-WITHIN_AVG-']:
+                    window['-RESTRUCTURE-'].update(value=False)
+                    window['-BETWEEN_AVG-'].update(value=False)
+            if event == '-SPECIFY_STIM_SET-':
+                if any(not len(value[i]) > 0 for i in ['-CONTROL-', '-TARGET-']):
+                    sg.PopupError('ERROR\n Please specify a Control and a Target stimuli.')
+                elif value['-CONTROL-'] == value['-TARGET-']:
+                    sg.PopupError('ERROR\n The Control cannot be the same as the Target')
+                else:
+                    window.hide()
+                    StimSetMapping = GroupStimSetWindow(Sessions, stimuli, value, Mapping = StimSetMapping)
+                    window.UnHide()
 
-    window.close()
-    
-    # Store data targets
-    # Note, -WITHIN_AVG- is not stored here since we
-    # handle it differently in RunAnalysis, since other
-    # functions may depend on it 
-    DataTars = {PreProLabel:[], WithinLabel:[]}
-    AvgFuncs = ['-RESTRUCTURE-', '-BETWEEN_AVG-']
-    StatsFuncs = ['-GEN_STATS-', '-LMM-']
-    
-    for func in AvgFuncs:
-        if value[func]:
-            _TarList = DataTars[WithinLabel]
-            _TarList.append(func)
-            DataTars.update({WithinLabel:_TarList})
-    
-    for func in StatsFuncs:
-        if value[func]:
-            _TarList = DataTars[value[func[:-1]+'_TAR-']]
-            _TarList.append(func)
-            DataTars.update({value[func[:-1]+'_TAR-']:_TarList})
+        window.close()
+        
+        # Store data targets
+        # Note, -WITHIN_AVG- is not stored here since we
+        # handle it differently in RunAnalysis, since other
+        # functions may depend on it 
+        DataTars = {PreProLabel:[], WithinLabel:[]}
+        AvgFuncs = ['-RESTRUCTURE-', '-BETWEEN_AVG-']
+        StatsFuncs = ['-GEN_STATS-', '-LMM-']
+        
+        for func in AvgFuncs:
+            if value[func]:
+                _TarList = DataTars[WithinLabel]
+                _TarList.append(func)
+                DataTars.update({WithinLabel:_TarList})
+        
+        for func in StatsFuncs:
+            if value[func]:
+                _TarList = DataTars[value[func[:-1]+'_TAR-']]
+                _TarList.append(func)
+                DataTars.update({value[func[:-1]+'_TAR-']:_TarList})
 
-    value.update({'DataTargets':DataTars})            
+        value.update({'DataTargets':DataTars})
+        value.update({'Mapping':StimSetMapping})
+    
+    else:
+        cancelled = True
 
     if cancelled:
         value = None
@@ -765,25 +929,33 @@ def RunPreprocessing(Title, Params, Files, SavePath, SaveParams = None):
         OutData = None
         if TagID == 'IMPORT':
             OutData = DataImporter.ImportData(sgParams=sgParameters)
+            window.refresh()
         elif TagID == 'NANFILT':
             OutData = DataImporter.FilterNaNs(InputData, sgParams=sgParams)
+            window.refresh()
         elif TagID == 'RT':
             OutData = DataImporter.ComputeRT(InputData, RTResLB = float(Parameters['RTResLB']), 
                                             RTPeakDistance = float(Parameters['RTPeakDistance']), 
                                             sgParams=sgParameters)
+            window.refresh()
         elif TagID == 'FILT':
-            OutData, _ = DataImporter.FilterData(InputData, MinDataRatio = float(Parameters['MinDataRatio']),
+            OutData, _ = DataImporter.FilterData(InputData, RemoveIncorrectResponses = Parameters['RemoveIncorrectResponses'], MinDataRatio = float(Parameters['MinDataRatio']),
                                         RemoveRT = Parameters['RemoveRT'], RTThreshold = float(Parameters['RTThreshold']),
                                         CalibrateAcc = Parameters['CalibrateAcc'], RemoveAcc = Parameters['RemoveAcc'],
                                         sgParams = sgParameters)
+            window.refresh()
         elif TagID == 'RESAMPLE':
             OutData = DataImporter.ResampleData(InputData, sgParams = sgParameters)
+            window.refresh()
         elif TagID == 'ROTCORRECT':
             OutData = DataImporter.Correct4Rotations(InputData, StoreTheta = Parameters['StoreTheta'], sgParams=sgParameters)
+            window.refresh()
         elif TagID == 'DISTANCE':
             OutData = DataImporter.ComputeDistance(InputData, ComputeTotalDistance = Params['ComputeTotalDistance'], sgParams=sgParameters)
+            window.refresh()
         elif TagID == 'RFRD':
             OutData = DataImporter.ComputeDeltaAandD(InputData, axes = Parameters['axes'], absolute = Parameters['absolute'], which = Parameters['which'], sgParams = sgParameters)
+            window.refresh()
 
         return OutData, sgParameters
 
@@ -874,32 +1046,18 @@ def RunPreprocessing(Title, Params, Files, SavePath, SaveParams = None):
                     if SaveParams['-SMALLSAVE-']:
                         if SaveParams['-SAVECSV-']:
                             Filetype = 'csv'
-                        # TO DO, determine if it is Full dataframe or averaged
-                        CondensedCols = [DataImporter.constants['PARTICIPANT_COLUMN'],
-                                         DataImporter.constants['STIMULUS_SET_COLUMN'],
-                                         DataImporter.constants['CORRECT_RESPONSE_COLUMN'],
-                                         DataImporter.constants['STIMULUS_COLUMN'],
-                                         DataImporter.constants['CONDITION_COLUMN'],
-                                         DataImporter.constants['BLOCK_COLUMN'],
-                                         DataImporter.constants['TRIAL_NUMBER_CUM_COLUMN']]
-                        try:
-                            CondensedCols.append(DataImporter.constants['RT_COLUMN'])
-                            if DataImporter.constants['DELTA_A_COLUMN'] in Data.columns:
-                                CondensedCols.append(DataImporter.constants['DELTA_A_COLUMN'])
-                            if DataImporter.constants['DELTA_D_COLUMN'] in Data.columns:
-                                CondensedCols.append(DataImporter.constants['DELTA_D_COLUMN'])
-                            CondensedData = Data[CondensedCols]
-                        except KeyError:
-                            Filetype = 'pkl'
-                            window['-OUTPUT-'].print('[ WARNING ] Necessary columns not found. Cannot save condensed file, I will save the full data instead.', text_color = 'red')
+                        CondensedData = DataImporter.CondenseDF(Data, sgParams = sgParams)
         
                 Filename = CheckFile(SaveParams['-SAVE_FILENAME-'], SavePath)
-                # window['-OUTPUT-'].print('[ INFO ] Filename: {}'.format(Filename))
                 window['-OUTPUT-'].print('[ INFO ] Saving processed file to {}, this may take a while and the program may (briefly) appear to be not responding. This is normal, please wait...'.format(SavePath))
                 window.refresh()
                 MetaDataFile = '{}_metadata.json'.format(Filename)
-                DataImporter.SaveDF('{}.{}'.format(Filename, Filetype), CondensedData, SavePath)
+                if SaveParams['-SAVECSV-']:
+                    DataImporter.SaveDF('{}.{}'.format(Filename, Filetype), CondensedData, SavePath)
+                else:
+                    DataImporter.SaveDF('{}.{}'.format(Filename, Filetype), Data, SavePath)
                 SaveMetaData(MetaDataFile, Filetype, SavePath, RunList, Params)
+                SaveParams.update({'Processed_FilePath':os.path.join(SavePath, '{}.{}'.format(Filename, Filetype))})
             if not cancelled:
                 Proceed()
             
@@ -916,29 +1074,136 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
         window['-NEXT-'].update(disabled=False)
         return None
 
+
+    def CheckFile(Filename, SavePath, counter = 0):
+        findingName = True
+        fname = Filename
+        while findingName:
+            if not os.path.isfile(os.path.join(SavePath, '{}.pkl'.format(fname))) or not os.path.isfile(os.path.join(SavePath, '{}.csv'.format(fname))) or not os.path.isfile(os.path.join(SavePath, '{}.xlsx'.format(fname))):
+                findingName = False
+            else:
+                fname = Filename + '_{}'.format(counter)
+            counter += 1
+
+        return Filename
+
+
     def Process(funcLabel, data, SaveParams, sgParams, returnData = False):
         if funcLabel == '-WITHIN_AVG-':
             D = Analysis.AverageWithinParticipant(data, sgParams = sgParams)
+            if SaveParams['-SAVE-']:
+                Filename = SaveParams['Analysis_Filename'] + '_Averaged_Within'
+                Filename = CheckFile(Filename, SaveParams['Analysis_Filepath'])
+                Filename = Filename + '.pkl'
+                sgParams['OUTPUT'].print('[ INFO ] Saving averaged within participants data to {}'.format(SaveParams['Analysis_Filepath']))
+                D.to_pickle(os.path.join(SaveParams['Analysis_Filepath'], Filename))
+                sgParams['OUTPUT'].print('[ INFO ] \tSuccessfully saved as {}!'.format(Filename))
         elif funcLabel == '-RESTRUCTURE-':
             D = Analysis.RestructureAvgDF(data, sgParams = sgParams)
         elif funcLabel == '-BETWEEN_AVG-':
             D = Analysis.AverageBetweenParticipant(data, sgParams = sgParams)
+            if SaveParams['-SAVE-']:
+                Filename = SaveParams['Analysis_Filename'] + '_Averaged_Between'
+                Filename = CheckFile(Filename, SaveParams['Analysis_Filepath'])
+                Filename = Filename + '.pkl'
+                sgParams['OUTPUT'].print('[ INFO ] Saving averaged between participants data to {}'.format(SaveParams['Analysis_Filepath']))                    
+                D.to_pickle(os.path.join(SaveParams['Analysis_Filepath'], Filename))
+                sgParams['OUTPUT'].print('[ INFO ] \tSuccessfully saved as {}!'.format(Filename))    
         elif funcLabel == '-GEN_STATS-':
             D = Analysis.GeneralStats(data, sgParams = sgParams)
-            # TODO: Save to CSV
+            for metric in D.keys():
+                Filename = SaveParams['Analysis_Filename'] + '_General_Statistics_{}'.format(metric)
+                Filename = CheckFile(Filename, SaveParams['Analysis_Filepath'])
+                Filename = Filename + '.csv'
+                sgParams['OUTPUT'].print('[ INFO ] Saving general statistics {} data to {}'.format(metric, SaveParams['Analysis_Filepath']))
+                D[metric].to_csv(os.path.join(SaveParams['Analysis_Filepath'], Filename))
+                sgParams['OUTPUT'].print('[ INFO ] \tSuccessfully saved as {}!'.format(Filename))                
         elif funcLabel == '-LMM-':
-            D = Analysis.LinearMixedModels(data, ReturnModel = True, sgParams = sgParams)
-            # TODO: Save to CSV
+            Map = {'rt':'RT', 'mda':'Acceleration', 'mdd':'Distance'}
+            D, mdl = Analysis.LinearMixedModels(data, ReturnModel = True, sgParams = sgParams)
+
+            for metric in mdl.keys():
+                mdf = mdl[metric].fit()
+                Filename = SaveParams['Analysis_Filename'] + '_LMM_Results_{}'.format(Map[metric])
+                Filename = CheckFile(Filename, SaveParams['Analysis_Filepath'])
+                Filename = Filename + '.csv'
+                sgParams['OUTPUT'].print('[ INFO ] Saving LMM {} data to {}'.format(metric, SaveParams['Analysis_Filepath']))
+                mdf.summary().tables[1].to_csv(os.path.join(SaveParams['Analysis_Filepath'], Filename))
+                sgParams['OUTPUT'].print('[ INFO ] \tSuccessfully saved as {}!'.format(Filename))                
+        
         if returnData:
             outData = D
         else:
             outData = None
         return outData, sgParams
 
-    RunFromFile = False
 
-    if DataFilePath is not None:
-        RunFromFile = True
+    def GetFileName(saveparams):
+        if saveparams['-SAVE-']:
+            Filename = saveparams['-SAVE_FILENAME-']
+            Filepath = saveparams['-SAVE_DIR-']
+        else:
+            try:
+                FilePathList = saveparams['-FILE_PATH-'].split('/')
+                if len(FilePathList) <= 1:
+                    FilePathList = saveparams['-FILE_PATH-'].split('\\')
+                    if len(FilePathList) <= 1:
+                        FilePathList = os.getcwd().split('\\')
+                        FilePathList.append('AAT_Analysis_Data.pkl')
+                Filename = FilePathList[-1][0:-4]
+                Filepath = '\\'.join(FilePathList[0:-1])
+            except KeyError:
+                Filename = 'AAT_Analysis_Data'
+                Filepath = os.getcwd()
+            
+        return Filename, Filepath
+
+
+    def SaveMapping(Mapping, saveparams):
+        ColorMap = {}
+        Colors = ['#FF6666', '#FFB266', '#FFFF66', '#B2FF66', '#66FFFF', '#66B2FF', '#B266FF', '#FF66B2', '#C0C0C0', '#FFFFFF',
+                  '#FFCCCC', '#FFE5CC', '#FFFFCC', '#E5FFCC', '#CCFFFF', '#CCE5FF', '#E5CCFF', '#FF66B2', '#606060', '#A0A0A0']
+        N = len(Colors)
+        i = 0
+        for session in Mapping.keys():
+            for stimset in Mapping[session].keys():
+                if session not in ColorMap.keys():
+                    ColorMap.update({session:Colors[int(i % N)]})
+                    i += 1
+                if stimset not in ColorMap.keys():
+                    ColorMap.update({stimset:Colors[int(i % N)]})
+                    i += 1
+                if Mapping[session][stimset] not in ColorMap.keys():
+                    ColorMap.update({Mapping[session][stimset]:Colors[int(i % N)]})
+                    i += 1
+        
+        Filename = saveparams['Analysis_Filename'] + '_GroupMapping'
+        Filename = CheckFile(Filename, saveparams['Analysis_Filepath'])
+        Filename = Filename + ".xlsx"
+        Workbook = xls.Workbook(os.path.join(saveparams['Analysis_Filepath'], Filename))
+        worksheet = Workbook.add_worksheet('Stimulus set mapping')
+        bold = Workbook.add_format({'bold':True})
+        worksheet.write(0, 0, 'Session', bold)
+        worksheet.write(0, 1, 'Stimulus Set', bold)
+        worksheet.write(0, 2, 'Control/Target Group', bold)
+        row = 1
+        for session in Mapping.keys():
+            for stimset in Mapping[session].keys():
+                colors = Workbook.add_format()
+                colors.set_bg_color(ColorMap[session])
+                worksheet.write(row, 0, session, colors)
+                colors = Workbook.add_format()
+                colors.set_bg_color(ColorMap[stimset])
+                worksheet.write(row, 1, stimset, colors)
+                colors = Workbook.add_format()
+                colors.set_bg_color(ColorMap[Mapping[session][stimset]])
+                worksheet.write(row, 2, Mapping[session][stimset], colors)
+                row+=1
+
+        Workbook.close()
+
+        return None
+
 
     DataImporter = AAT.DataImporter('Dummy', 'Dummy', printINFO=False)
     Analysis = AAT.Analysis(Params['-CONTROL-'], Params['-TARGET-'], constants = DataImporter.constants, printINFO=False)
@@ -972,18 +1237,31 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
         if event == '-RUN-':
             window['-RUN-'].update(disabled=True)
 
-            if RunFromFile:
-                window['-OUTPUT-'].print('[ INFO ] Loading data from file, this may take a while and the program may (briefly) appear to be not responding. This is normal, please wait...')
-                window.refresh()
-                Data = DataImporter.LoadDF(DataFilePath, None)    
+            Filename, Filepath = GetFileName(SaveParams)
+            SaveParams.update({'Analysis_Filename':Filename, 'Analysis_Filepath':Filepath})
+
+            if SaveParams['-SAVE-']:
+                SaveMapping(Params['Mapping'], SaveParams)
+                    
+            window['-OUTPUT-'].print('[ INFO ] Applying stimulus set mapping...')
+            Data = Analysis.FuseStimulusSets(Data, Params['Mapping'], sgParams = sgParams)
+            window.refresh()
             
             if len(Params['DataTargets']['Preprocessed data']) > 0:
                 for func in Params['DataTargets']['Preprocessed data']:
                     _, sgParams = Process(func, Data, SaveParams, sgParams)
                     window.refresh()
+                    if sgParams['IS_CLOSED']:
+                        output.print('[ ERROR ] User cancelled process.', background_color='red', text_color = 'white')
+                        cancelled = True
+                        break
 
             if Params['-WITHIN_AVG-']:
                 Data, sgParams = Process('-WITHIN_AVG-', Data, SaveParams, sgParams, returnData = True)
+                if sgParams['IS_CLOSED']:
+                    output.print('[ ERROR ] User cancelled process.', background_color='red', text_color = 'white')
+                    cancelled = True
+                    break
 
                 if len(Params['DataTargets']['Within participant averaged data']) > 0:
                     for func in Params['DataTargets']['Within participant averaged data']:
@@ -994,6 +1272,10 @@ def RunAnalysis(Title, Data, Params, DataFilePath = None, SaveParams = None):
                         else:
                             _, sgParams = Process(func, Data, SaveParams, sgParams)
                         window.refresh()
+                        if sgParams['IS_CLOSED']:
+                            output.print('[ ERROR ] User cancelled process.', background_color='red', text_color = 'white')
+                            cancelled = True
+                            break
 
             if not cancelled:
                 Proceed()
@@ -1023,32 +1305,41 @@ RunAll = StartWindow(Title, config=configFile)
 
 if RunAll is not None:
     # If user selected to import from raw data (for both processing only or processing + analysis)
-    if RunAll in (1, 2):
+    if RunAll in (0, 1):
         PreFolderPaths = PreProcessFolder(Title, config=configFile)
         if PreFolderPaths:
             RawDataPath = PreFolderPaths['-RAW_DATA_DIR-']
             CondDataPath = PreFolderPaths['-COND_DATA_DIR-']
-            PreSavePath = PreFolderPaths['-PRE_SAVE_DIR-']
+            PreSavePath = PreFolderPaths['-SAVE_DIR-']
 
             # Show screen for processing params
-            UserInputs = Pre_FunctionParams(Title, config=configFile)
+            UserInputs = Pre_FunctionParams(Title, config=configFile, ForAnalysis=bool(abs(RunAll - 1)))
             if UserInputs:
                 Data = RunPreprocessing(Title, UserInputs, [RawDataPath, CondDataPath], PreSavePath, SaveParams=PreFolderPaths)
+                if RunAll == 0:
+                    AnalysisInputs = AnalysisParams(Title, Data, config=configFile, ImportFilePath = PreFolderPaths['Processed_FilePath'])
+                    if AnalysisInputs:
+                        RunAnalysis(Title, Data, AnalysisInputs, SaveParams=PreFolderPaths)
             else: 
                 pass
     # If user selected to import from file
-    else:
+    elif RunAll in (2, 3):
         ImportFilePaths = LoadFromFile(Title, config = configFile)
         if ImportFilePaths:
             ImportedFile = ImportFilePaths['-FILE_PATH-']
             ImpSavePath = ImportFilePaths['-SAVE_DIR-']
-            UserInputs = Pre_FunctionParams(Title, config=configFile, ImportFilePath=ImportedFile)
-            if UserInputs:
-                Data = RunPreprocessing(Title, UserInputs, [ImportedFile], ImpSavePath, SaveParams=ImportFilePaths)
-
-                # TEST, REMOVE LATER
-                AnalysisInputs = AnalysisParams(Title, Data, config=configFile)
-                RunAnalysis(Title, Data, AnalysisInputs)
+            if RunAll == 2:
+                UserInputs = Pre_FunctionParams(Title, config=configFile, ImportFilePath=ImportedFile)
+                if UserInputs:
+                    Data = RunPreprocessing(Title, UserInputs, [ImportedFile], ImpSavePath, SaveParams=ImportFilePaths)
+            elif RunAll == 3:
+                Data = LoadData(Title, ImportedFile)
+                if Data is not None:
+                    AnalysisInputs = AnalysisParams(Title, Data, config = configFile, ImportFilePath = ImportedFile)
+                    if AnalysisInputs:
+                        RunAnalysis(Title, Data, AnalysisInputs, SaveParams = ImportFilePaths)
+                else: 
+                    sg.PopupError('ERROR\n Failed to load data')
             
 
 #=======================================================================================================================#
