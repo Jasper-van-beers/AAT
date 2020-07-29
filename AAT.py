@@ -3250,16 +3250,40 @@ class Analysis:
         unifiedTime = unifiedTime.reshape((1, len(unifiedTime)))
         dataHost = unifiedTime.copy() * 0
         dataHost = dataHost.astype(float)
-
-        # Create empty dictionary to store data
-        data = {}
-        for col in DF.columns:
-            data.update({col:[]})
         
         FactorMap = {}
+
+        # Find indices of missing data
+        MissingIdx = np.array(np.where(DF.isnull().to_numpy())).T
         MissingData = np.sum(DF.isnull())
         for idx, col in enumerate(DF.columns):
             FactorMap.update({col:(1/(N - MissingData[idx]))})
+
+        # Create dictionary to store data
+        data = {}
+        for cIDX, col in enumerate(DF.columns):
+            pIDX = 0
+            Building = True
+            while Building:
+                if pIDX == DF.shape[0]:
+                    Building = False
+                    data.update({col:np.nan})
+                if pIDX in MissingIdx[:, 0] and cIDX in MissingIdx[:, 1]:
+                    pIDX += 1
+                else:
+                    Building = False
+                    try:
+                        shape = DF.iloc[pIDX, cIDX].shape
+                        if len(shape) == 0:
+                            data.update({col:DF.iloc[pIDX, cIDX] * 0})
+                        else:
+                            if len(shape) == 1:
+                                shape = (1, shape[0])
+                            tup = shape[0] * [dataHost.copy()]
+                            colData = np.vstack(tuple(tup))
+                            data.update({col:colData})
+                    except AttributeError:
+                        data.update({col:DF.iloc[pIDX, cIDX] * 0})
 
         execution_time = 0
         sTime = time.time()
@@ -3313,19 +3337,23 @@ class Analysis:
                 except AttributeError:
                     surrogateData = data[col]
                 
-                if pIdx != 0:
+                
+                if pIdx in MissingIdx[:, 0] and cIdx in MissingIdx[:, 1]:
+                    pass
+                else:
                     oldData = data[col]
-                    newData = oldData.copy()
                     if ax:
+                        newData = oldData.copy()
                         for row in range(surrogateData.shape[0]):
                             newData[row] = np.nansum(np.vstack((oldData[row], surrogateData[row])), axis = (ax-1))
                     else:
                         if not np.isnan(pData[col]):
-                            newData = np.nansum(np.vstack((oldData, surrogateData)))
-                else: 
-                    newData = surrogateData
-
-                data.update({col : newData})
+                            try:
+                                newData = np.nansum(np.vstack((oldData, surrogateData)))
+                            except ValueError:
+                                import code
+                                code.interact(local=locals())
+                    data.update({col : newData})
 
             execution_time = time.time() - sTime
 
