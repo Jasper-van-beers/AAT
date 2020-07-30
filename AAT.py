@@ -2999,6 +2999,14 @@ class Analysis:
             # Specify the independent variables
             DF['is_{}'.format(Target)] = DF[self.constants['STIMULUS_SET_COLUMN']]
             DF['is_{}'.format(Target)].replace({'{}'.format(Control):0, '{}'.format(Target):1}, inplace = True)
+
+            # Remove all stimuli other than the target and control stimuli
+            TarIdx = np.where(DF['is_{}'.format(Target)] == 1)
+            ConIdx = np.where(DF['is_{}'.format(Target)] == 0)
+            RelevantIdx = np.unique(np.hstack((TarIdx, ConIdx)))
+            DF = DF.iloc[RelevantIdx, :]
+
+            # Define pull idx
             DF['is_pull'] = DF[self.constants['CORRECT_RESPONSE_COLUMN']]
             DF['is_pull'].replace({'Push':0, 'Pull':1}, inplace = True)
 
@@ -3337,7 +3345,6 @@ class Analysis:
                 except AttributeError:
                     surrogateData = data[col]
                 
-                
                 if pIdx in MissingIdx[:, 0] and cIdx in MissingIdx[:, 1]:
                     pass
                 else:
@@ -3348,11 +3355,7 @@ class Analysis:
                             newData[row] = np.nansum(np.vstack((oldData[row], surrogateData[row])), axis = (ax-1))
                     else:
                         if not np.isnan(pData[col]):
-                            try:
-                                newData = np.nansum(np.vstack((oldData, surrogateData)))
-                            except ValueError:
-                                import code
-                                code.interact(local=locals())
+                            newData = np.nansum(np.vstack((oldData, surrogateData)))
                     data.update({col : newData})
 
             execution_time = time.time() - sTime
