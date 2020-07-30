@@ -1876,6 +1876,12 @@ class Plotter:
             self.constants = constants
 
 
+
+    def setFontSize(self, fontsize):
+        plt.rcParams.update({'font.size':fontsize})
+        return None
+
+
     # Function to display plots
     def ShowPlots(self):
         plt.show()
@@ -1884,7 +1890,7 @@ class Plotter:
 
     # Function to plot the acceleration, in the x, y, and z directions, as a function of time
     # Units: Acceleration in m/s^2 and Time in ms (milliseconds)
-    def AccelerationTime(self, participant, DF, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], YLims = None, HideLegend = False, **kwargs):
+    def AccelerationTime(self, participant, DF, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], XLims = None, YLims = None, HideLegend = False, **kwargs):
         AxisMap = {'X':['ACCELERATION_X_COLUMN', 0], 
                    'Y':['ACCELERATION_Y_COLUMN', 1], 
                    'Z':['ACCELERATION_COLUMN', 2]}
@@ -1926,6 +1932,8 @@ class Plotter:
                 plt.gca().set_yticklabels([])
             if YLims is not None:
                 plt.ylim(YLims)
+            if XLims is not None:
+                plt.xlim(XLims)
         elif all (key in DF.columns for key in AveragedCols):
             try:
                 if not stimulus: 
@@ -1945,8 +1953,8 @@ class Plotter:
                             t = DF.loc[participant, 'time']
                             y = DF.loc[participant, col][AxisMap[ax][1]]
                             reqShape = t.shape
-                            # plt.plot(t.T, y.reshape(reqShape).T, label = '{} {} ({})'.format(mov, stim, ax))
-                            plt.plot(t.T, y.reshape(reqShape).T, label = '{}'.format(stim))
+                            plt.plot(t.T, y.reshape(reqShape).T, label = '{} {} ({})'.format(mov, stim, ax))
+                            # plt.plot(t.T, y.reshape(reqShape).T, label = '{}'.format(stim))
 
                 if not HideLegend:
                     plt.legend()
@@ -1961,9 +1969,11 @@ class Plotter:
                     plt.gca().set_yticklabels([])
                 if YLims is not None:
                     plt.ylim(YLims)
+                if XLims is not None:
+                    plt.xlim(XLims)
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -1972,7 +1982,7 @@ class Plotter:
 
     # Function to plot the displacement, in the x, y, and z directions, as a function of time
     # Units: Displacement in cm and Time in ms (milliseconds)
-    def DistanceTime(self, participant, DF, Threshold = 60, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], YLims = None, HideLegend = False, **kwargs):
+    def DistanceTime(self, participant, DF, Threshold = 60, axis = ['X', 'Y', 'Z'], movement = ['Pull', 'Push'], stimulus = None, ParentFig = None, ShowAxis = [True, True], YLims = None, XLims = None, HideLegend = False, **kwargs):
         AxisMap = {'X':['DISTANCE_X_COLUMN', 0], 
                    'Y':['DISTANCE_Y_COLUMN', 1], 
                    'Z':['DISTANCE_Z_COLUMN', 2]}
@@ -2025,6 +2035,8 @@ class Plotter:
                 plt.gca().set_yticklabels([])
             if YLims is not None:
                 plt.ylim(YLims)
+            if XLims is not None:
+                plt.xlim(XLims)
 
         elif all (key in DF.columns for key in AveragedCols):
             try:
@@ -2072,10 +2084,12 @@ class Plotter:
                     plt.gca().set_yticklabels([])
                 if YLims is not None:
                     plt.ylim(YLims)
+                if XLims is not None:
+                    plt.xlim(XLims)
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -2201,7 +2215,7 @@ class Plotter:
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -2326,7 +2340,7 @@ class Plotter:
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2462,7 +2476,7 @@ class Plotter:
             
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2598,7 +2612,7 @@ class Plotter:
             
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2756,7 +2770,7 @@ class Plotter:
                 
                 except KeyError:
                     print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                    print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).')
+                    print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
             else:
                 print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2803,7 +2817,8 @@ class Plotter:
                     movement = getParam(Params, 'movement', func), stimulus = getParam(Params, 'stimulus', func),
                     Gradient = getParam(Params, 'Gradient', func), ColorMap = getParam(Params, 'ColorMap', func), 
                     Threshold = getParam(Params, 'Threshold', func), YLims = getParam(Params, 'YLims', func), 
-                    ShowAxis = getParam(Params, 'ShowAxis', func), HideLegend = getParam(Params, 'HideLegend', func))
+                    ShowAxis = getParam(Params, 'ShowAxis', func), HideLegend = getParam(Params, 'HideLegend', func),
+                    XLims = getParam(Params, 'XLims', func))
 
         return None
 
