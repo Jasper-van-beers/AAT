@@ -181,8 +181,12 @@ class DataImporter:
 
 
 
-    def CondenseDF(self, DataFrame, sgParams = None):
+    def CondenseDF(self, DataFrame, AddQuestions = True, sgParams = None):
         DF = DataFrame.copy(deep = True)
+        if AddQuestions:
+            for key in DataFrame.columns:
+                if key not in self.constants.values() and not key.startswith('DG') and key != 'completion':
+                    self.CondensedCols.append(key)
         if all(col in DF.columns for col in self.CondensedCols):
             try:
                 Mapper = {self.constants['RT_COLUMN']:"Reaction Time"}
@@ -2785,19 +2789,21 @@ class Plotter:
         fig = plt.figure()
 
         for idx, func in enumerate(Functions):
-            # Need to create special subplot for 3D graphs. All 3D functions have '3D' at the end
-            # so we use this to identify them 
-            if func.__name__.endswith('3D'):
-                subFig = fig.add_subplot(Layout[0], Layout[1], idx + 1, projection = '3d')
-            else:
-                subFig = plt.subplot(Layout[0], Layout[1], idx + 1)
-            Params = FuncArgs[idx]
-            func(participant = getParam(Params, 'participant'), DF = getParam(Params, 'DF'), ParentFig = subFig,
-                metric = getParam(Params, 'metric', func), axis = getParam(Params, 'axis', func), 
-                movement = getParam(Params, 'movement', func), stimulus = getParam(Params, 'stimulus', func),
-                Gradient = getParam(Params, 'Gradient', func), ColorMap = getParam(Params, 'ColorMap', func), 
-                Threshold = getParam(Params, 'Threshold', func), YLims = getParam(Params, 'YLims', func), 
-                ShowAxis = getParam(Params, 'ShowAxis', func), HideLegend = getParam(Params, 'HideLegend', func))
+            # Make sure that a function is present
+            if func is not None:
+                # Need to create special subplot for 3D graphs. All 3D functions have '3D' at the end
+                # so we use this to identify them 
+                if func.__name__.endswith('3D'):
+                    subFig = fig.add_subplot(Layout[0], Layout[1], idx + 1, projection = '3d')
+                else:
+                    subFig = plt.subplot(Layout[0], Layout[1], idx + 1)
+                Params = FuncArgs[idx]
+                func(participant = getParam(Params, 'participant'), DF = getParam(Params, 'DF'), ParentFig = subFig,
+                    metric = getParam(Params, 'metric', func), axis = getParam(Params, 'axis', func), 
+                    movement = getParam(Params, 'movement', func), stimulus = getParam(Params, 'stimulus', func),
+                    Gradient = getParam(Params, 'Gradient', func), ColorMap = getParam(Params, 'ColorMap', func), 
+                    Threshold = getParam(Params, 'Threshold', func), YLims = getParam(Params, 'YLims', func), 
+                    ShowAxis = getParam(Params, 'ShowAxis', func), HideLegend = getParam(Params, 'HideLegend', func))
 
         return None
 
