@@ -409,14 +409,15 @@ def PlotDefinition(Title, Data, SubplotLayout):
             ID = event.split('-OPTIONS_')[-1]
             FuncParams = OptionWindow(value['-PLOT_{}'.format(ID)], PlottingOptions, Stimuli, Data)
             NewToolTip = ''
-            for key in FuncParams.keys():
-                if key != 'DF':
-                    NewToolTip = NewToolTip + "{} = {}\n".format(key, FuncParams[key])
-            window['-FRAME_{}'.format(ID)].SetTooltip(NewToolTip)
-            ID_Nums = ID.split('_')
-            Pos = PosMap['{},{}'.format(int(ID_Nums[0]), int(ID_Nums[-1][0:-1]))]
-            FuncArgs[Pos] = FuncParams
-            Funcs[Pos] = PlottingOptions[value['-PLOT_{}'.format(ID)]]
+            if FuncParams is not None:
+                for key in FuncParams.keys():
+                    if key != 'DF':
+                        NewToolTip = NewToolTip + "{} = {}\n".format(key, FuncParams[key])
+                window['-FRAME_{}'.format(ID)].SetTooltip(NewToolTip)
+                ID_Nums = ID.split('_')
+                Pos = PosMap['{},{}'.format(int(ID_Nums[0]), int(ID_Nums[-1][0:-1]))]
+                FuncArgs[Pos] = FuncParams
+                Funcs[Pos] = PlottingOptions[value['-PLOT_{}'.format(ID)]]
 
     window.close()
 
