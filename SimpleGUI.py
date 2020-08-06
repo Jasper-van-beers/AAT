@@ -119,7 +119,7 @@ def PreProcessFolder(Title, config = None):
               [sg.In(default_text=defaults['-COND_DATA_DIR-'], size=fieldEntrySize, key = '-COND_DATA_DIR-', enable_events=True), sg.FolderBrowse()],
               [sg.Text('')],
               [sg.Checkbox('Would you like to save the processed files?', key='-SAVE-', enable_events=True, default=defaults['-SAVE-'])],
-              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=isDisabled, key = '-SAVE_BROWSE-')],
+              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=not defaults['-SAVE-'], key = '-SAVE_BROWSE-')],
               [sg.Text('Save filename:', text_color=bColors[int(defaults['-SAVE-'])], key='-SF_TEXT-'), sg.InputText(default_text=defaults['-SAVE_FILENAME-'], size=(50, 1), key='-SAVE_FILENAME-', disabled = not defaults['-SAVE-'], text_color=tColors[int(defaults['-SAVE-'])])],
               [sg.Checkbox('Save condensed data', key='-SMALLSAVE-', enable_events = True, default=defaults['-SMALLSAVE-'], disabled=not defaults['-SAVE-']),
                sg.Checkbox('Save as .csv', key='-SAVECSV-', enable_events = True, default=defaults['-SAVECSV-']*defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-'])],
@@ -148,13 +148,13 @@ def PreProcessFolder(Title, config = None):
                 window['-SAVE_BROWSE-'].update(disabled=True)
                 window['-SAVE_FILENAME-'].update(disabled=True, text_color=tColors[int(value['-SAVE-'])])
                 window['-SF_TEXT-'].update(text_color = bColors[int(value['-SAVE-'])])
-                window['-SMALLSAVE-'].update(disabled=True)
-                window['-SAVECSV-'].update(disabled=True)
+                window['-SMALLSAVE-'].update(value=False, disabled=True)
+                window['-SAVECSV-'].update(value=False, disabled=True)
         if event == '-SMALLSAVE-':
             if value[event]:
                 window['-SAVECSV-'].update(disabled=False)
             else:
-                window['-SAVECSV-'].update(disabled=True)
+                window['-SAVECSV-'].update(value=value['-SMALLSAVE-'], disabled=True)
         if value['-SAVE-']:
             if all(os.path.isdir(value[key]) for key in inputFieldKeys) and os.path.isdir(value['-SAVE_DIR-']):
                 window['-NEXT-'].update(disabled=False)
@@ -215,7 +215,7 @@ def LoadFromFile(Title, config = None):
     layout = [[sg.Text('Please locate the File Path: ')],
               [sg.In(default_text = defaults['-FILE_PATH-'], size=fieldEntrySize, key = '-FILE_PATH-', enable_events=True), sg.FileBrowse(file_types=(('Pickle Files', '*.pkl'),))],
               [sg.Checkbox('Would you like to save the output files?', default = defaults['-SAVE-'], key='-SAVE-', enable_events=True)],
-              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=isDisabled, key = '-SAVE_BROWSE-')],
+              [sg.InputText(default_text=defaults['-SAVE_DIR-'], size=fieldEntrySize, disabled=not defaults['-SAVE-'], key = '-SAVE_DIR-', enable_events=True, text_color=tColors[int(defaults['-SAVE-'])]), sg.FolderBrowse(disabled=not defaults['-SAVE-'], key = '-SAVE_BROWSE-')],
               [sg.Text('Save filename:', text_color=bColors[int(defaults['-SAVE-'])], key='-SF_TEXT-'), sg.InputText(default_text=defaults['-SAVE_FILENAME-'], size=(50, 1), key='-SAVE_FILENAME-', disabled = not defaults['-SAVE-'], text_color=tColors[int(defaults['-SAVE-'])])],
               [sg.Checkbox('Save condensed data', key='-SMALLSAVE-', enable_events = True, default=defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-']),
                sg.Checkbox('Save as .csv', key='-SAVECSV-', enable_events = True, default=defaults['-SAVECSV-']*defaults['-SMALLSAVE-'], disabled=not defaults['-SMALLSAVE-'])],              
@@ -244,13 +244,13 @@ def LoadFromFile(Title, config = None):
                 window['-SAVE_BROWSE-'].update(disabled=True)
                 window['-SAVE_FILENAME-'].update(disabled=True, text_color=tColors[int(value['-SAVE-'])])
                 window['-SF_TEXT-'].update(text_color = bColors[int(value['-SAVE-'])])
-                window['-SMALLSAVE-'].update(disabled=True)
-                window['-SAVECSV-'].update(disabled=True)
+                window['-SMALLSAVE-'].update(value = False, disabled=True)
+                window['-SAVECSV-'].update(value = False, disabled=True)
         if event == '-SMALLSAVE-':
             if value[event]:
                 window['-SAVECSV-'].update(disabled=False)
             else:
-                window['-SAVECSV-'].update(disabled=True)
+                window['-SAVECSV-'].update(value=value['-SMALLSAVE-'], disabled=True)
         if value['-SAVE-']:
             if os.path.isfile(value['-FILE_PATH-']) and os.path.isdir(value['-SAVE_DIR-']):
                 window['-NEXT-'].update(disabled = False)

@@ -2906,7 +2906,11 @@ class Analysis:
         def ComputeStats(header, col, Control, Target, PullIdx, PushIdx, ControlIdx, TargetIdx):
             x = DataFrame[col]
 
-            variables = {'Push':PushIdx, 'Pull':PullIdx, '{}'.format(Control):ControlIdx, 
+            intBothIdx = list(np.where(ControlIdx)[0]) + list(np.where(TargetIdx)[0])
+            bothIdx = np.array([False] * len(PushIdx))
+            bothIdx[intBothIdx] = True
+
+            variables = {'Push':(PushIdx & bothIdx), 'Pull':(PullIdx & bothIdx), '{}'.format(Control):ControlIdx, 
                          '{}'.format(Target):TargetIdx, 'Push x {}'.format(Control):(ControlIdx & PushIdx),
                          'Pull x {}'.format(Control):(ControlIdx & PullIdx), 'Push x {}'.format(Target):(TargetIdx + PushIdx), 
                          'Pull x {}'.format(Target):(TargetIdx & PullIdx)}

@@ -12,7 +12,7 @@
     },
     "Import File Information": {
         "File Path": "Path\\to\\AAT\\pkl\\file",
-        "Save File":false,
+        "Save File":true,
         "Save Filename":"myProcessedAAT",
         "Save Path":"Path\\to\\save\\folder",
         "Save Condensed":true, 
