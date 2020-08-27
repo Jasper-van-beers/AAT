@@ -1299,6 +1299,7 @@ class DataImporter:
         # exact number of rows is unknown, a dataframe of N x M cannot be 
         # preallocated beforehand. 
         self._Data = []
+        self._DG_Cols = []
         # If the user as opted to display information
         if self.INFO:
             print('[INFO] Loading Participant Data...')
@@ -1365,6 +1366,7 @@ class DataImporter:
                             for q in questions:
                                 try:
                                     self._CondTable.rename(columns = {q['id']:q['label']}, inplace=True)
+                                    self._DG_Cols.append(q['id'])
                                 except KeyError:
                                     pass
 
@@ -1373,6 +1375,7 @@ class DataImporter:
             execution_time = time.time() - sTime
         # Create pandas DataFrame from data
         Data = pd.concat(self._Data, sort = True).reset_index()
+        Data.drop(columns=np.unique(self._DG_Cols), inplace=True)
         
         return Data
 
