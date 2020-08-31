@@ -1375,7 +1375,10 @@ class DataImporter:
             execution_time = time.time() - sTime
         # Create pandas DataFrame from data
         Data = pd.concat(self._Data, sort = True).reset_index()
-        Data.drop(columns=np.unique(self._DG_Cols), inplace=True)
+        try:
+            Data.drop(columns=np.unique(self._DG_Cols), inplace=True)
+        except KeyError:
+            pass
         
         return Data
 
