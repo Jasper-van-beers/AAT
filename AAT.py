@@ -1979,7 +1979,7 @@ class Plotter:
                     plt.xlim(XLims)
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -2095,7 +2095,7 @@ class Plotter:
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -2221,7 +2221,7 @@ class Plotter:
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
 
@@ -2346,7 +2346,7 @@ class Plotter:
 
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2482,7 +2482,7 @@ class Plotter:
             
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2618,7 +2618,7 @@ class Plotter:
             
             except KeyError:
                 print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
         else:
             print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
@@ -2776,7 +2776,7 @@ class Plotter:
                 
                 except KeyError:
                     print('[ERROR] - Inputted DataFrame contains columns "time" and "PID", so I assume it is a DF containing the averages of participants.')
-                    print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stimuli))
+                    print('          However, no columns exist with the inputted movements ({}) or stimuli ({}).'.format(movement, stim))
             else:
                 print('[ERROR] - Expected columns not present in the inputted DataFrame.')
         
