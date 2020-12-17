@@ -2918,7 +2918,7 @@ class Analysis:
 
             variables = {'Push':(PushIdx & bothIdx), 'Pull':(PullIdx & bothIdx), '{}'.format(Control):ControlIdx, 
                          '{}'.format(Target):TargetIdx, 'Push x {}'.format(Control):(ControlIdx & PushIdx),
-                         'Pull x {}'.format(Control):(ControlIdx & PullIdx), 'Push x {}'.format(Target):(TargetIdx + PushIdx), 
+                         'Pull x {}'.format(Control):(ControlIdx & PullIdx), 'Push x {}'.format(Target):(TargetIdx & PushIdx), 
                          'Pull x {}'.format(Target):(TargetIdx & PullIdx)}
 
             headers = ['condition', 'mean', 'std']
@@ -2936,14 +2936,14 @@ class Analysis:
             print('{} statistics'.format(header))
             print('===============================================================')
             print('Condition\t\t|\tMean\t\t|\tstd')
-            print('Push\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PushIdx]), np.nanstd(x[PushIdx])))
-            print('Pull\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PullIdx]), np.nanstd(x[PullIdx])))
+            print('Push\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[(bothIdx & PushIdx)]), np.nanstd(x[(bothIdx & PushIdx)])))
+            print('Pull\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[(bothIdx & PullIdx)]), np.nanstd(x[(bothIdx & PullIdx)])))
             print('{}\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx]), np.nanstd(x[ControlIdx])))
             print('{}\t\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx]), np.nanstd(x[TargetIdx])))
-            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PushIdx]), np.nanstd(x[ControlIdx & PushIdx])))
-            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PullIdx]), np.nanstd(x[ControlIdx & PullIdx])))
-            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PushIdx]), np.nanstd(x[TargetIdx & PushIdx])))
-            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PullIdx]), np.nanstd(x[TargetIdx & PullIdx])))
+            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[(ControlIdx & PushIdx)]), np.nanstd(x[(ControlIdx & PushIdx)])))
+            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[(ControlIdx & PullIdx)]), np.nanstd(x[(ControlIdx & PullIdx)])))
+            print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[(TargetIdx & PushIdx)]), np.nanstd(x[(TargetIdx & PushIdx)])))
+            print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[(TargetIdx & PullIdx)]), np.nanstd(x[(TargetIdx & PullIdx)])))
             print('===============================================================')
             print('\n')
 
@@ -2953,14 +2953,14 @@ class Analysis:
                 sgParams['OUTPUT'].print('{} statistics'.format(header))
                 sgParams['OUTPUT'].print('===============================================================')
                 sgParams['OUTPUT'].print('Condition\t\t|\tMean\t\t|\tstd')
-                sgParams['OUTPUT'].print('Push\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PushIdx]), np.nanstd(x[PushIdx])))
-                sgParams['OUTPUT'].print('Pull\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[PullIdx]), np.nanstd(x[PullIdx])))
+                sgParams['OUTPUT'].print('Push\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[(bothIdx & PushIdx)]), np.nanstd(x[(bothIdx & PushIdx)])))
+                sgParams['OUTPUT'].print('Pull\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(np.nanmean(x[(bothIdx & PullIdx)]), np.nanstd(x[(bothIdx & PullIdx)])))
                 sgParams['OUTPUT'].print('{}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx]), np.nanstd(x[ControlIdx])))
                 sgParams['OUTPUT'].print('{}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx]), np.nanstd(x[TargetIdx])))
-                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PushIdx]), np.nanstd(x[ControlIdx & PushIdx])))
-                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[ControlIdx & PullIdx]), np.nanstd(x[ControlIdx & PullIdx])))
-                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PushIdx]), np.nanstd(x[TargetIdx & PushIdx])))
-                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[TargetIdx & PullIdx]), np.nanstd(x[TargetIdx & PullIdx])))
+                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[(ControlIdx & PushIdx)]), np.nanstd(x[(ControlIdx & PushIdx)])))
+                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Control, np.nanmean(x[(ControlIdx & PullIdx)]), np.nanstd(x[(ControlIdx & PullIdx)])))
+                sgParams['OUTPUT'].print('Push x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[(TargetIdx & PushIdx)]), np.nanstd(x[(TargetIdx & PushIdx)])))
+                sgParams['OUTPUT'].print('Pull x {}\t\t|\t{:.2f}\t\t|\t{:.2f}'.format(Target, np.nanmean(x[(TargetIdx & PullIdx)]), np.nanstd(x[(TargetIdx & PullIdx)])))
                 sgParams['OUTPUT'].print('===============================================================')
                 sgParams['OUTPUT'].print('\n')
 
